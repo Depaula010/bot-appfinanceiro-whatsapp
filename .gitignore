@@ -3,3 +3,4 @@ node_modules/
 
 # Pasta de sessão do WhatsApp (OBRIGATÓRIO)
 .wwebjs_auth/
+.wwebjs_cache/
