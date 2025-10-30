@@ -1,0 +1,5 @@
+# Pasta de bibliotecas do Node.js (OBRIGATÓRIO)
+node_modules/
+
+# Pasta de sessão do WhatsApp (OBRIGATÓRIO)
+.wwebjs_auth/
