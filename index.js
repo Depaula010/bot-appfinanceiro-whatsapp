@@ -5,6 +5,7 @@ const express = require('express');
 const axios = require('axios');
 const app = express();
 const port = process.env.PORT || 3000;
+let ultimoDiaExecutado = null;
 
 // ========= 1. CONFIGURAÇÕES =========
 const PYTHON_API_URL = 'https://app-controle-financeiro-oh32.onrender.com';
@@ -75,8 +76,40 @@ client.on('message_create', async msg => {
 
 // ========= 4. FUNÇÃO 2: "FALAR" (Sem Mudança) =========
 app.use(express.json());
+// Rota de "Health Check" E "Cron Job"
 app.get('/ping', (req, res) => {
     console.log("[HEALTH CHECK] Ping recebido do UptimeRobot!");
+
+    const dataAtual = new Date();
+    // Fuso de São Paulo (UTC-3)
+    const horaNoBrasil = new Date(dataAtual.toLocaleString("en-US", { timeZone: "America/Sao_Paulo" })).getHours();
+    const diaNoBrasil = dataAtual.getDate(); // Pega o dia (1-31)
+
+    // <<< LÓGICA DO CRON JOB >>>
+    // Defina o horário que você quer que o motor rode (ex: 8 da manhã)
+    const HORA_DE_RODAR = 8; 
+
+    // Verifica se é a hora de rodar E se já não rodou hoje
+    if (horaNoBrasil === HORA_DE_RODAR && diaNoBrasil !== ultimoDiaExecutado) {
+
+        console.log(`[MOTOR-CRON] Detectada hora de rodar (${HORA_DE_RODAR}h)! Disparando o Cérebro Python...`);
+        ultimoDiaExecutado = diaNoBrasil; // Marca que já rodou hoje
+
+        // Chama a rota secreta no Cérebro (Python)
+        axios.post(`${PYTHON_API_URL}/admin/run-motor-agendamentos`, 
+            {}, // Sem corpo (body)
+            { headers: { 'x-api-key': API_SECRET_KEY } } // Envia a chave secreta
+        )
+        .then(response => {
+            console.log("[MOTOR-CRON] Cérebro processou os agendamentos com sucesso.");
+        })
+        .catch(error => {
+            console.error("[MOTOR-CRON] ERRO ao disparar o Cérebro:", error.message);
+            // Reseta o dia para tentar de novo na próxima hora 8
+            ultimoDiaExecutado = null; 
+        });
+    }
+
     res.status(200).send({ status: 'ok', timestamp: new Date().toISOString() });
 });
 app.post('/enviar-mensagem', (req, res) => {
