@@ -117,6 +117,13 @@ const client = new Client({
         store: store,
         backupSyncIntervalMs: 300000 // Salva a sessão no DB a cada 5 minutos
     }),
+    // --- INÍCIO DA NOVA OTIMIZAÇÃO ---
+    // Força o uso de uma versão específica do WA Web
+    // Isso pode estabilizar o bot e prevenir picos de memória de novas atualizações
+    webVersionCache: {
+      type: 'remote',
+      remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1012930225-alpha.html',
+    },
     puppeteer: {
         args: [
             '--no-sandbox',
