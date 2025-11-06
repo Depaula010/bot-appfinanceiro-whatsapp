@@ -118,7 +118,17 @@ const client = new Client({
         backupSyncIntervalMs: 300000 // Salva a sessão no DB a cada 5 minutos
     }),
     puppeteer: {
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',      // Usa /tmp em vez da memória compartilhada (importante)
+            '--disable-accelerated-2d-canvas',
+            '--disable-gpu',                // Desativa a GPU (não necessária)
+            '--no-first-run',
+            '--no-zygote',
+            '--single-process',             // Tenta rodar em um único processo
+            '--disable-extensions'          // Desativa extensões
+        ]
     }
 });
 
