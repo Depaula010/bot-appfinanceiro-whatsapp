@@ -29,13 +29,73 @@ const pool = new Pool({
     connectionString: DATABASE_URL
 });
 
-const store = new PgStore({
-    pool: pool,
-    sessionName: 'bot-financeiro-sessao' // Um nome único para esta sessão
-});
+// --- NOSSO 'STORE' MANUAL PARA O POSTGRESQL ---
+// Esta classe diz ao RemoteAuth como salvar, carregar e deletar a sessão
+class PgStore {
+    constructor(pool, sessionName) {
+        this.pool = pool;
+        this.sessionName = sessionName;
+    }
+
+    async save(session) {
+        const sessionData = JSON.stringify(session);
+        console.log(`[PgStore] Salvando sessão no DB: ${this.sessionName}`);
+        
+        const query = `
+            INSERT INTO wwebjs_auth_sessions (session_name, session_data, created_at)
+            VALUES ($1, $2, NOW())
+            ON CONFLICT (session_name)
+            DO UPDATE SET session_data = $2;
+        `;
+        
+        try {
+            await this.pool.query(query, [this.sessionName, sessionData]);
+            console.log(`[PgStore] Sessão salva com sucesso.`);
+        } catch (err) {
+            console.error('[PgStore] ERRO AO SALVAR SESSÃO:', err);
+        }
+    }
+
+    async load() {
+        console.log(`[PgStore] Carregando sessão do DB: ${this.sessionName}`);
+        const query = 'SELECT session_data FROM wwebjs_auth_sessions WHERE session_name = $1;';
+        
+        try {
+            const { rows } = await this.pool.query(query, [this.sessionName]);
+            if (rows.length > 0) {
+                const sessionData = rows[0].session_data;
+                console.log(`[PgStore] Sessão encontrada. Carregando...`);
+                return JSON.parse(sessionData);
+            }
+            console.log(`[PgStore] Nenhuma sessão encontrada no DB.`);
+            return undefined;
+        } catch (err) {
+            console.error('[PgStore] ERRO AO CARREGAR SESSÃO:', err);
+            return undefined;
+        }
+    }
+
+    async delete() {
+        console.log(`[PgStore] Deletando sessão do DB: ${this.sessionName}`);
+        const query = 'DELETE FROM wwebjs_auth_sessions WHERE session_name = $1;';
+        
+        try {
+            await this.pool.query(query, [this.sessionName]);
+            console.log(`[PgStore] Sessão deletada com sucesso.`);
+        } catch (err) {
+            console.error('[PgStore] ERRO AO DELETAR SESSÃO:', err);
+        }
+    }
+}
+// --- FIM DO 'STORE' MANUAL ---
+
 
 // ========= 2. CONFIGURAÇÃO DO BOT WHATSAPP (COM RemoteAuth) =========
 console.log("Iniciando cliente do WhatsApp com RemoteAuth (PostgreSQL)...");
+
+// Instancia o nosso 'store' manual
+const store = new PgStore(pool, 'bot-financeiro-sessao');
+
 const client = new Client({
     // SUBSTITUI LocalAuth POR RemoteAuth
     authStrategy: new RemoteAuth({
