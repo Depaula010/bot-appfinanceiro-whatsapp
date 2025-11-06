@@ -1,11 +1,34 @@
 {
+  "name": "bot-financeiro-whatsapp",
+  "version": "1.0.0",
+  "description": "Bot WhatsApp para gestão financeira usando Baileys",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "whatsapp",
+    "baileys",
+    "bot",
+    "financeiro"
+  ],
+  "author": "",
+  "license": "ISC",
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
   "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.5",
     "axios": "^1.13.1",
     "express": "^5.1.0",
     "pg": "^8.11.3",
-    "qrcode-terminal": "^0.12.0",
     "pino": "^9.1.0",
-    "@whiskeysockets/baileys": "^6.7.5",
-    "@whiskeysockets/baileys-pg-store": "^1.0.1"
+    "qrcode-terminal": "^0.12.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
   }
 }

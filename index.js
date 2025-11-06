@@ -1,13 +1,12 @@
 // ========= 0. IMPORTAÇÕES =========
 const { 
     default: makeWASocket, 
-    useMultiFileAuthState, 
     fetchLatestBaileysVersion,
-    makeInMemoryStore,
     DisconnectReason,
-    jidNormalizedUser
+    jidNormalizedUser,
+    delay,
+    makeCacheableSignalKeyStore
 } = require('@whiskeysockets/baileys');
-const { PgStore } = require('@whiskeysockets/baileys-pg-store');
 const { Pool } = require('pg');
 const pino = require('pino');
 const qrcode = require('qrcode-terminal');
@@ -19,216 +18,542 @@ const app = express();
 const port = process.env.PORT || 3000;
 let ultimoDiaExecutado = null;
 
+// Validação de variáveis de ambiente obrigatórias
+const REQUIRED_ENV_VARS = ['DATABASE_URL', 'ADMIN_WHATSAPP_NUMBER', 'API_SECRET_KEY'];
+REQUIRED_ENV_VARS.forEach(varName => {
+    if (!process.env[varName]) {
+        console.error(`ERRO CRÍTICO: Variável de ambiente ${varName} não definida.`);
+        process.exit(1);
+    }
+});
+
 const ADMIN_WHATSAPP_NUMBER = process.env.ADMIN_WHATSAPP_NUMBER;
 const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://localhost:8000';
-const API_SECRET_KEY = process.env.API_SECRET_KEY || 'uma-senha-bem-forte-12345';
+const API_SECRET_KEY = process.env.API_SECRET_KEY;
 const DATABASE_URL = process.env.DATABASE_URL;
 
-if (!DATABASE_URL) {
-    console.error("ERRO CRÍTICO: Variável de ambiente DATABASE_URL não definida.");
-    process.exit(1);
-}
-
+// Configuração do Pool PostgreSQL
 const pool = new Pool({
     connectionString: DATABASE_URL,
+    ssl: { rejectUnauthorized: false },
+    max: 20,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 10000,
 });
 
-// Configura o Store de Autenticação do Baileys
-const authStore = new PgStore(pool, {
-    cleanupInterval: 30, // Intervalo (em dias) para limpar dados antigos
-    maxRetries: 10
-});
-
-// O socket (cliente) do Baileys, global para ser usado pelo Express
+// Cliente do Baileys
 let sock;
-let logger = pino({ level: 'warn' }); // Nível 'warn' para não poluir os logs do Render
+const logger = pino({ level: process.env.LOG_LEVEL || 'warn' });
 
-// ========= 2. FUNÇÃO PRINCIPAL DO BOT (BAILEYS) =========
-async function connectToWhatsApp() {
-    console.log("Iniciando conexão com o WhatsApp (Baileys)...");
-    
-    // Pega o estado salvo (auth) do banco de dados
-    const { state, saveCreds } = await authStore.useAuth('baileys_session_auth');
+// ========= 2. STORE DE AUTENTICAÇÃO NO POSTGRESQL =========
 
-    const { version } = await fetchLatestBaileysVersion();
-    console.log(`Usando WA v${version.join('.')}`);
-
-    sock = makeWASocket({
-        version,
-        logger,
-        printQRInTerminal: false, // Vamos imprimir manualmente
-        auth: state
-    });
-
-    // Evento: Atualização da Conexão (QR Code, Conectado, Desconectado)
-    sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect, qr } = update;
-
-        if (qr) {
-            console.log("========================================");
-            console.log("LOGIN NECESSÁRIO: Escaneie com o celular que será o BOT:");
-            qrcode.generate(qr, { small: true });
-            console.log("========================================");
-        }
-
-        if (connection === 'close') {
-            const shouldReconnect = (lastDisconnect.error)?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.warn(`[CONEXÃO] Conexão fechada. Motivo: ${lastDisconnect.error?.message}. Reconectando: ${shouldReconnect}`);
-            
-            if (shouldReconnect) {
-                connectToWhatsApp();
-            } else {
-                console.error("[CONEXÃO] Logout detectado. Limpe a tabela 'baileys_auth_store' e reinicie.");
-            }
-        } else if (connection === 'open') {
-            console.log('*** BOT ESTÁ PRONTO E CONECTADO! ***');
-            
-            // --- Notificação de Startup para o Admin (Mesma lógica de antes) ---
-            const adminChatId = `${ADMIN_WHATSAPP_NUMBER}@s.whatsapp.net`;
-            const fusoHorarioSP = { timeZone: 'America/Sao_Paulo' };
-            const dataFormatada = new Date().toLocaleString('pt-BR', fusoHorarioSP);
-            const startupMessage = `✅ *Bot Financeiro (Online - Baileys)*\n\nServiço reiniciado e conectado com sucesso.\n\n*Horário:* ${dataFormatada}`;
-            
-            setTimeout(() => {
-                sock.sendMessage(adminChatId, { text: startupMessage })
-                    .then(() => console.log("[STARTUP] Notificação de 'Bot Online' enviada para o admin."))
-                    .catch((err) => console.error("[STARTUP] Falha ao enviar notificação para o admin.", err));
-            }, 10000); // 10s de delay
-        }
-    });
-
-    // Evento: Salvando Credenciais (quando o estado muda)
-    sock.ev.on('creds.update', saveCreds);
-
-    // Evento: Mensagem Recebida (FUNÇÃO 1: "OUVIR")
-    sock.ev.on('messages.upsert', async (m) => {
-        if (!m.messages || m.messages.length === 0) return;
-        
-        const msg = m.messages[0];
-        
-        // Ignora mensagens de broadcast, sem texto, ou do próprio bot
-        if (!msg.message || msg.key.fromMe || !msg.key.remoteJid || !msg.message.conversation) {
-            return;
-        }
-
-        // Formata o ID do remetente
-        const from = msg.key.remoteJid;
-        const fromNumber = jidNormalizedUser(from);
-        const msgBody = msg.message.conversation;
-
-        try {
-            console.log(`[OUVINDO] Mensagem recebida de ${fromNumber}: "${msgBody}"`);
-            
-            const response = await axios.post(`${PYTHON_API_URL}/webhook-whatsapp`, 
-                {
-                    texto: msgBody,
-                    numero_remetente: fromNumber // Envia só o número
-                },
-                { 
-                    headers: { 'x-api-key': API_SECRET_KEY }
-                }
-            );
-
-            // Reage à mensagem original (Baileys)
-            await sock.sendMessage(from, {
-                react: { text: '👍', key: msg.key }
-            });
-
-            if (response.data && response.data.resposta) {
-                // Envia a resposta (Baileys)
-                await sock.sendMessage(from, { text: response.data.resposta });
-            }
-
-        } catch (error) {
-            console.error("[ERRO] Falha ao processar mensagem:", error.message);
-            
-            await sock.sendMessage(from, {
-                react: { text: '❌', key: msg.key }
-            });
-        }
-    });
+/**
+ * Cria tabelas necessárias no banco
+ */
+async function inicializarBanco() {
+    try {
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS baileys_auth (
+                session_id VARCHAR(100) NOT NULL,
+                data_key VARCHAR(100) NOT NULL,
+                data_value TEXT NOT NULL,
+                PRIMARY KEY (session_id, data_key)
+            )
+        `);
+        console.log('[DATABASE] Tabela baileys_auth criada/verificada.');
+    } catch (error) {
+        console.error('[DATABASE] Erro ao criar tabelas:', error.message);
+        throw error;
+    }
 }
 
-// ========= 3. SERVIDOR EXPRESS (FUNÇÃO 2: "FALAR" E "PING-CRON") =========
+/**
+ * Implementação customizada do useAuthState usando PostgreSQL
+ */
+function useDatabaseAuthState(sessionId = 'baileys_session') {
+    
+    // Lê dados do banco
+    const readData = async (key) => {
+        try {
+            const result = await pool.query(
+                'SELECT data_value FROM baileys_auth WHERE session_id = $1 AND data_key = $2',
+                [sessionId, key]
+            );
+            
+            if (result.rows.length > 0) {
+                const data = JSON.parse(result.rows[0].data_value);
+                return data;
+            }
+            return null;
+        } catch (error) {
+            console.error(`[AUTH] Erro ao ler ${key}:`, error.message);
+            return null;
+        }
+    };
+
+    // Escreve dados no banco
+    const writeData = async (key, data) => {
+        try {
+            await pool.query(`
+                INSERT INTO baileys_auth (session_id, data_key, data_value)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (session_id, data_key)
+                DO UPDATE SET data_value = $3
+            `, [sessionId, key, JSON.stringify(data)]);
+            
+            console.log(`[AUTH] ${key} salvo no banco.`);
+        } catch (error) {
+            console.error(`[AUTH] Erro ao salvar ${key}:`, error.message);
+        }
+    };
+
+    // Remove dados do banco
+    const removeData = async (key) => {
+        try {
+            await pool.query(
+                'DELETE FROM baileys_auth WHERE session_id = $1 AND data_key = $2',
+                [sessionId, key]
+            );
+        } catch (error) {
+            console.error(`[AUTH] Erro ao remover ${key}:`, error.message);
+        }
+    };
+
+    // State object compatível com Baileys
+    const state = {
+        creds: null,
+        keys: {}
+    };
+
+    // Carrega credenciais
+    const loadCreds = async () => {
+        state.creds = await readData('creds') || {
+            noiseKey: null,
+            signedIdentityKey: null,
+            signedPreKey: null,
+            registrationId: null,
+            advSecretKey: null,
+            processedHistoryMessages: [],
+            nextPreKeyId: 0,
+            firstUnuploadedPreKeyId: 0,
+            accountSettings: { unarchiveChats: false }
+        };
+    };
+
+    // Salva credenciais
+    const saveCreds = async () => {
+        await writeData('creds', state.creds);
+    };
+
+    return {
+        state: {
+            creds: state.creds,
+            keys: {
+                get: async (type, ids) => {
+                    const data = {};
+                    for (const id of ids) {
+                        const key = `${type}-${id}`;
+                        const value = await readData(key);
+                        if (value) {
+                            data[id] = value;
+                        }
+                    }
+                    return data;
+                },
+                set: async (data) => {
+                    for (const category in data) {
+                        for (const id in data[category]) {
+                            const key = `${category}-${id}`;
+                            const value = data[category][id];
+                            if (value) {
+                                await writeData(key, value);
+                            } else {
+                                await removeData(key);
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        loadCreds,
+        saveCreds
+    };
+}
+
+// ========= 3. FUNÇÕES AUXILIARES =========
+
+/**
+ * Formata número para o padrão do WhatsApp
+ */
+function formatarChatId(numero) {
+    const numeroLimpo = numero.replace(/\D/g, '');
+    return `${numeroLimpo}@s.whatsapp.net`;
+}
+
+/**
+ * Envia notificação para o admin
+ */
+async function notificarAdmin(mensagem) {
+    try {
+        if (!sock || !sock.user) {
+            console.warn('[ADMIN] Bot não está pronto para enviar notificação.');
+            return;
+        }
+        
+        const adminChatId = formatarChatId(ADMIN_WHATSAPP_NUMBER);
+        const fusoHorarioSP = { timeZone: 'America/Sao_Paulo' };
+        const dataFormatada = new Date().toLocaleString('pt-BR', fusoHorarioSP);
+        
+        const mensagemCompleta = `${mensagem}\n\n*Horário:* ${dataFormatada}`;
+        
+        await sock.sendMessage(adminChatId, { text: mensagemCompleta });
+        console.log('[ADMIN] Notificação enviada com sucesso.');
+    } catch (error) {
+        console.error('[ADMIN] Erro ao enviar notificação:', error.message);
+    }
+}
+
+// ========= 4. FUNÇÃO PRINCIPAL DO BOT =========
+
+async function connectToWhatsApp() {
+    console.log('[BAILEYS] Iniciando conexão com o WhatsApp...');
+    
+    try {
+        // Inicializa banco de dados
+        await inicializarBanco();
+        
+        // Obtém estado de autenticação do PostgreSQL
+        const { state, saveCreds, loadCreds } = useDatabaseAuthState('baileys_session');
+        
+        // Carrega credenciais do banco
+        await loadCreds();
+        
+        // Obtém versão mais recente do WhatsApp Web
+        const { version } = await fetchLatestBaileysVersion();
+        console.log(`[BAILEYS] Usando WhatsApp Web v${version.join('.')}`);
+
+        // Cria socket do Baileys
+        sock = makeWASocket({
+            version,
+            logger,
+            printQRInTerminal: false,
+            auth: {
+                creds: state.creds,
+                keys: makeCacheableSignalKeyStore(state.keys, logger)
+            },
+            markOnlineOnConnect: true,
+            syncFullHistory: false,
+            browser: ['Bot Financeiro', 'Chrome', '1.0.0'],
+            getMessage: async (key) => {
+                return { conversation: '' };
+            }
+        });
+
+        // ===== EVENTO: Atualização da Conexão =====
+        sock.ev.on('connection.update', async (update) => {
+            const { connection, lastDisconnect, qr } = update;
+
+            // Exibe QR Code
+            if (qr) {
+                console.log('\n========================================');
+                console.log('🔐 LOGIN NECESSÁRIO');
+                console.log('Escaneie o QR Code abaixo com o WhatsApp:');
+                console.log('========================================');
+                qrcode.generate(qr, { small: true });
+                console.log('========================================');
+                console.log('⏳ Aguardando leitura do QR Code...\n');
+            }
+
+            // Conexão fechada
+            if (connection === 'close') {
+                const statusCode = lastDisconnect?.error?.output?.statusCode;
+                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+                
+                console.warn(`[CONEXÃO] Fechada. Motivo: ${lastDisconnect?.error?.message || 'Desconhecido'}`);
+                console.warn(`[CONEXÃO] Status Code: ${statusCode}`);
+                console.warn(`[CONEXÃO] Reconectar: ${shouldReconnect}`);
+                
+                if (shouldReconnect) {
+                    console.log('[CONEXÃO] Reconectando em 5 segundos...');
+                    await delay(5000);
+                    connectToWhatsApp();
+                } else {
+                    console.error('[CONEXÃO] ⚠️  LOGOUT DETECTADO!');
+                    console.error('[CONEXÃO] Execute: DELETE FROM baileys_auth WHERE session_id = \'baileys_session\';');
+                    console.error('[CONEXÃO] Depois reinicie o serviço.');
+                    await notificarAdmin('🔴 *Bot Desconectado*\n\nLogout detectado. É necessário reautenticar o bot.');
+                }
+            }
+
+            // Conexão aberta
+            if (connection === 'open') {
+                console.log('\n✅ *** BOT CONECTADO COM SUCESSO! ***');
+                console.log(`📱 Número: ${sock.user.id}`);
+                console.log(`👤 Nome: ${sock.user.name || 'N/A'}\n`);
+                
+                // Notifica admin após delay
+                setTimeout(() => {
+                    notificarAdmin('✅ *Bot Financeiro Online*\n\nServiço conectado com sucesso ao WhatsApp!');
+                }, 10000);
+            }
+        });
+
+        // ===== EVENTO: Salvar Credenciais =====
+        sock.ev.on('creds.update', async () => {
+            await saveCreds();
+        });
+
+        // ===== EVENTO: Mensagens Recebidas =====
+        sock.ev.on('messages.upsert', async (m) => {
+            try {
+                if (!m.messages || m.messages.length === 0) return;
+                
+                const msg = m.messages[0];
+                
+                // Filtros: ignora mensagens do próprio bot, broadcasts, sem texto
+                if (!msg.message || 
+                    msg.key.fromMe || 
+                    !msg.key.remoteJid || 
+                    msg.key.remoteJid === 'status@broadcast') {
+                    return;
+                }
+
+                // Extrai texto da mensagem
+                const msgBody = msg.message.conversation || 
+                               msg.message.extendedTextMessage?.text || 
+                               '';
+                
+                if (!msgBody) return;
+
+                const from = msg.key.remoteJid;
+                const fromNumber = jidNormalizedUser(from).replace('@s.whatsapp.net', '');
+
+                console.log(`[MENSAGEM] De: ${fromNumber} | Texto: "${msgBody}"`);
+
+                // Marca como lida
+                await sock.readMessages([msg.key]);
+
+                // Envia para o backend Python
+                const response = await axios.post(
+                    `${PYTHON_API_URL}/webhook-whatsapp`,
+                    {
+                        texto: msgBody,
+                        numero_remetente: fromNumber
+                    },
+                    { 
+                        headers: { 'x-api-key': API_SECRET_KEY },
+                        timeout: 30000
+                    }
+                );
+
+                // Reação de sucesso
+                await sock.sendMessage(from, {
+                    react: { text: '👍', key: msg.key }
+                });
+
+                // Envia resposta
+                if (response.data?.resposta) {
+                    await sock.sendMessage(from, { 
+                        text: response.data.resposta 
+                    });
+                    console.log(`[RESPOSTA] Enviada para ${fromNumber}`);
+                }
+
+            } catch (error) {
+                console.error('[ERRO] Falha ao processar mensagem:', error.message);
+                
+                try {
+                    await sock.sendMessage(msg.key.remoteJid, {
+                        react: { text: '❌', key: msg.key }
+                    });
+                } catch (e) {
+                    console.error('[ERRO] Não foi possível enviar reação de erro:', e.message);
+                }
+            }
+        });
+
+    } catch (error) {
+        console.error('[BAILEYS] Erro crítico ao conectar:', error);
+        console.log('[BAILEYS] Tentando reconectar em 10 segundos...');
+        await delay(10000);
+        connectToWhatsApp();
+    }
+}
+
+// ========= 5. SERVIDOR EXPRESS =========
+
 app.use(express.json());
 
-// Rota de "Health Check" E "Cron Job" (Sem mudanças na lógica)
-app.get('/ping', (req, res) => {
-    console.log("[HEALTH CHECK] Ping recebido do UptimeRobot!");
-
-    const dataAtual = new Date();
-    const horaNoBrasil = new Date(dataAtual.toLocaleString("en-US", { timeZone: "America/Sao_Paulo" })).getHours();
-    const diaNoBrasil = dataAtual.getDate();
-    const HORA_DE_RODAR = 8; 
-
-    if (horaNoBrasil === HORA_DE_RODAR && diaNoBrasil !== ultimoDiaExecutado) {
-        console.log(`[MOTOR-CRON] Detectada hora de rodar (${HORA_DE_RODAR}h)! Disparando o Cérebro Python...`);
-        ultimoDiaExecutado = diaNoBrasil; 
-
-        axios.post(`${PYTHON_API_URL}/admin/run-motor-agendamentos`, 
-            {}, 
-            { headers: { 'x-api-key': API_SECRET_KEY } }
-        )
-        .then(response => {
-            console.log("[MOTOR-CRON] Cérebro processou os agendamentos com sucesso.");
-        })
-        .catch(error => {
-            console.error("[MOTOR-CRON] ERRO ao disparar o Cérebro:", error.message);
-            ultimoDiaExecutado = null; 
-        });
-    }
-    res.status(200).send({ status: 'ok', timestamp: new Date().toISOString() });
+// Middleware de log
+app.use((req, res, next) => {
+    console.log(`[EXPRESS] ${req.method} ${req.path}`);
+    next();
 });
 
-// Rota para o Python enviar mensagens (FUNÇÃO 2: "FALAR", adaptada para Baileys)
+// ===== ROTA: Health Check + Cron Job =====
+app.get('/ping', async (req, res) => {
+    console.log('[HEALTH] Ping recebido!');
+
+    const dataAtual = new Date();
+    const horaNoBrasil = new Date(
+        dataAtual.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' })
+    ).getHours();
+    const diaNoBrasil = dataAtual.getDate();
+    const HORA_DE_RODAR = 8;
+
+    // Lógica do Cron Job
+    if (horaNoBrasil === HORA_DE_RODAR && diaNoBrasil !== ultimoDiaExecutado) {
+        console.log(`[MOTOR-CRON] Hora de rodar detectada (${HORA_DE_RODAR}h)!`);
+        ultimoDiaExecutado = diaNoBrasil;
+
+        axios.post(
+            `${PYTHON_API_URL}/admin/run-motor-agendamentos`,
+            {},
+            { 
+                headers: { 'x-api-key': API_SECRET_KEY },
+                timeout: 60000
+            }
+        )
+        .then(() => {
+            console.log('[MOTOR-CRON] Backend processou agendamentos com sucesso.');
+        })
+        .catch(error => {
+            console.error('[MOTOR-CRON] ERRO:', error.message);
+            ultimoDiaExecutado = null;
+        });
+    }
+
+    res.status(200).json({ 
+        status: 'ok', 
+        timestamp: new Date().toISOString(),
+        bot_connected: !!(sock && sock.user)
+    });
+});
+
+// ===== ROTA: Enviar Mensagem =====
 app.post('/enviar-mensagem', async (req, res) => {
     const secret = req.headers['x-api-key'];
 
     if (secret !== API_SECRET_KEY) {
-        console.warn('[FALAR] Bloqueado: Tentativa de envio com API Key errada.');
-        return res.status(401).send({ status: 'erro', mensagem: 'Não autorizado' });
+        console.warn('[ENVIAR] Bloqueado: API Key inválida.');
+        return res.status(401).json({ 
+            status: 'erro', 
+            mensagem: 'Não autorizado' 
+        });
     }
 
     const { numero, mensagem } = req.body;
 
     if (!numero || !mensagem) {
-        console.warn(`[FALAR] Erro 400: 'numero' ou 'mensagem' faltando no body.`);
-        return res.status(400).send({ status: 'erro', mensagem: "Faltando 'numero' ou 'mensagem'" });
+        console.warn('[ENVIAR] Erro 400: Parâmetros faltando.');
+        return res.status(400).json({ 
+            status: 'erro', 
+            mensagem: "Parâmetros 'numero' e 'mensagem' são obrigatórios" 
+        });
     }
 
-    // Garante que o 'sock' está pronto
-    if (!sock || sock.user.id === undefined) {
-         console.warn(`[FALAR] Erro 503: Bot (Baileys) ainda não está conectado.`);
-        return res.status(503).send({ status: 'erro', mensagem: 'Bot não está pronto.' });
+    if (!sock || !sock.user) {
+        console.warn('[ENVIAR] Erro 503: Bot não está conectado.');
+        return res.status(503).json({ 
+            status: 'erro', 
+            mensagem: 'Bot não está pronto. Aguarde a conexão.' 
+        });
     }
 
     try {
-        // Formata o ID do chat para Baileys (ex: 553194001072@s.whatsapp.net)
-        const chatId = `${numero}@s.whatsapp.net`;
+        const chatId = formatarChatId(numero);
 
-        // (MELHORIA) Verifica se o número existe no WhatsApp (Baileys)
+        // Verifica se o número existe no WhatsApp
         const [result] = await sock.onWhatsApp(chatId);
         
         if (!result || !result.exists) {
-            console.warn(`[FALAR] Erro 404: Tentativa de enviar para número não registrado: ${numero}`);
-            return res.status(404).send({ status: 'erro', mensagem: 'Número não encontrado no WhatsApp.' });
+            console.warn(`[ENVIAR] Erro 404: Número não registrado: ${numero}`);
+            return res.status(404).json({ 
+                status: 'erro', 
+                mensagem: 'Número não encontrado no WhatsApp.' 
+            });
         }
 
-        // Envia a mensagem (Baileys)
+        // Envia a mensagem
         await sock.sendMessage(chatId, { text: mensagem });
-        console.log(`[FALAR] Mensagem enviada com sucesso para ${numero}.`);
-        res.status(200).send({ status: 'sucesso', mensagem: 'Mensagem enviada.' });
+        console.log(`[ENVIAR] ✅ Mensagem enviada para ${numero}.`);
+        
+        res.status(200).json({ 
+            status: 'sucesso', 
+            mensagem: 'Mensagem enviada com sucesso.' 
+        });
 
     } catch (err) {
-        console.error(`[FALAR] ERRO 500 ao enviar mensagem para ${numero}:`, err.message);
-        res.status(500).send({ status: 'erro', mensagem: 'Falha ao enviar mensagem', detalhe: err.message });
+        console.error(`[ENVIAR] Erro 500 ao enviar para ${numero}:`, err.message);
+        res.status(500).json({ 
+            status: 'erro', 
+            mensagem: 'Falha ao enviar mensagem', 
+            detalhe: err.message 
+        });
     }
 });
 
-// ========= 4. INICIALIZAÇÃO =========
-// Inicia o bot
-connectToWhatsApp();
-// Inicia o servidor web
+// ===== ROTA: Status do Bot =====
+app.get('/status', (req, res) => {
+    const botStatus = {
+        connected: !!(sock && sock.user),
+        user: sock?.user ? {
+            id: sock.user.id,
+            name: sock.user.name
+        } : null,
+        timestamp: new Date().toISOString()
+    };
+
+    res.status(200).json(botStatus);
+});
+
+// ===== ROTA: Limpar Sessão (Útil para forçar novo QR Code) =====
+app.post('/limpar-sessao', async (req, res) => {
+    const secret = req.headers['x-api-key'];
+
+    if (secret !== API_SECRET_KEY) {
+        return res.status(401).json({ 
+            status: 'erro', 
+            mensagem: 'Não autorizado' 
+        });
+    }
+
+    try {
+        await pool.query("DELETE FROM baileys_auth WHERE session_id = 'baileys_session'");
+        console.log('[ADMIN] Sessão limpa do banco de dados.');
+        
+        res.status(200).json({ 
+            status: 'sucesso', 
+            mensagem: 'Sessão limpa. Reinicie o serviço para gerar novo QR Code.' 
+        });
+    } catch (error) {
+        console.error('[ADMIN] Erro ao limpar sessão:', error.message);
+        res.status(500).json({ 
+            status: 'erro', 
+            mensagem: 'Falha ao limpar sessão' 
+        });
+    }
+});
+
+// Tratamento de erros
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('[PROCESS] Unhandled Rejection:', reason);
+});
+
+process.on('uncaughtException', (error) => {
+    console.error('[PROCESS] Uncaught Exception:', error);
+    process.exit(1);
+});
+
+// ========= 6. INICIALIZAÇÃO =========
+
+connectToWhatsApp().catch(error => {
+    console.error('[INIT] Erro ao iniciar bot:', error);
+    process.exit(1);
+});
+
 app.listen(port, () => {
-    console.log(`[API DO BOT] Rodando na porta ${port}`);
+    console.log(`\n🚀 [API] Servidor rodando na porta ${port}`);
+    console.log(`📦 [API] Ambiente: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`💾 [DATABASE] Autenticação salva no PostgreSQL\n`);
 });
