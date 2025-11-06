@@ -14,6 +14,8 @@ const port = process.env.PORT || 3000;
 let ultimoDiaExecutado = null;
 
 // ========= 1. CONFIGURAÇÕES =========
+// [Adicionar em index.js, na Seção 1. CONFIGURAÇÕES]
+const ADMIN_WHATSAPP_NUMBER = '553194001072'; // <-- ADICIONE ESTA LINHA
 const PYTHON_API_URL = 'https://app-controle-financeiro-oh32.onrender.com';
 const API_SECRET_KEY = process.env.API_SECRET_KEY || 'uma-senha-bem-forte-12345';
 // --- NOVA CONFIGURAÇÃO DE BANCO ---
@@ -107,19 +109,64 @@ const client = new Client({
     }
 });
 
-client.on('qr', qr => { /* ... (código do QR) ... */ 
+client.on('qr', qr => { 
     console.log("========================================");
     console.log("LOGIN NECESSÁRIO: Escaneie com o celular que será o BOT:");
     qrcode.generate(qr, { small: true });
     console.log("========================================");
 });
-client.on('ready', () => { /* ... (código de pronto) ... */ 
-    console.log('*** BOT ESTÁ PRONTO E CONECTADO! ***');
-});
-client.on('auth_failure', (msg) => { /* ... (código de falha) ... */ });
-client.on('error', (err) => { /* ... (código de erro) ... */ });
-client.on('disconnected', (reason) => { /* ... (código de desconectado) ... */ });
 
+client.on('ready', async () => {
+    console.log('*** BOT ESTÁ PRONTO E CONECTADO! ***');
+
+    // Loga qual número está sendo usado como bot
+    if (client.info && client.info.wid) {
+        console.log(`[INFO] Logado como: ${client.info.wid.user}`);
+    } else {
+        console.log('[INFO] Informações do cliente (wid) não disponíveis no momento.');
+    }
+
+    // --- Notificação de Startup para o Admin ---
+    const adminChatId = `${ADMIN_WHATSAPP_NUMBER}@c.us`;
+    const fusoHorarioSP = { timeZone: 'America/Sao_Paulo' };
+    const dataFormatada = new Date().toLocaleString('pt-BR', fusoHorarioSP);
+
+    const startupMessage = `✅ *Bot Financeiro (Online)*\n\nServiço reiniciado e conectado com sucesso no Render.\n\n*Horário:* ${dataFormatada}`;
+
+    // Adiciona um pequeno delay (10s) para garantir que a sessão esteja 100% pronta para enviar
+    setTimeout(async () => {
+        try {
+            await client.sendMessage(adminChatId, startupMessage);
+            console.log(`[STARTUP] Notificação de "Bot Online" enviada para o admin.`);
+        } catch (err) {
+            console.error(`[STARTUP] Falha ao enviar notificação de startup para ${adminChatId}.`, err);
+        }
+    }, 10000); // 10 segundos de delay
+});
+
+client.on('auth_failure', async (msg) => {
+    console.error(`[FALHA DE AUTENTICAÇÃO] Não foi possível autenticar: ${msg}`);
+    console.log('[FALHA DE AUTENTICAÇÃO] Limpando a sessão do banco de dados...');
+    try {
+        await store.delete(); // Deleta a sessão inválida do PostgreSQL
+        console.log('[FALHA DE AUTENTICAÇÃO] Sessão limpa. Por favor, reinicie o bot para escanear um novo QR Code.');
+    } catch (err) {
+        console.error('[FALHA DE AUTENTICAÇÃO] Erro ao limpar a sessão do DB:', err);
+    }
+    // Você pode querer encerrar o processo aqui para que o Render o reinicie
+    // process.exit(1); 
+});
+client.on('error', (err) => {
+    console.error('[ERRO DO CLIENTE] O cliente do WhatsApp encontrou um erro:', err);
+});
+
+client.on('disconnected', (reason) => {
+    console.warn(`[DESCONECTADO] O cliente foi desconectado. Motivo: ${reason}`);
+    console.log('[DESCONECTADO] Tentando reconectar automaticamente...');
+    // A biblioteca tentará se reconectar automaticamente.
+    // Se você notar que ele não volta, pode forçar uma reinicialização:
+    client.initialize(); 
+});
 // ========= 3. FUNÇÃO 1: "OUVIR" (COM A CORREÇÃO) =========
 client.on('message_create', async msg => {
     try {
@@ -200,14 +247,51 @@ app.get('/ping', (req, res) => {
 
     res.status(200).send({ status: 'ok', timestamp: new Date().toISOString() });
 });
-app.post('/enviar-mensagem', (req, res) => {
-    // ... (Todo o código do /enviar-mensagem continua igual) ...
+
+// ========= 4. FUNÇÃO 2: "FALAR" (Versão Melhorada) =========
+// ... (seu app.use(express.json()) e app.get('/ping') ficam aqui) ...
+
+app.post('/enviar-mensagem', async (req, res) => { // 1. Adicionado 'async'
     const secret = req.headers['x-api-key'];
-    if (secret !== API_SECRET_KEY) { /* ... (erro 401) ... */ }
+
+    // 2. Resposta de erro 401 completa
+    if (secret !== API_SECRET_KEY) {
+        console.warn('[FALAR] Bloqueado: Tentativa de envio com API Key errada.');
+        return res.status(401).send({ status: 'erro', mensagem: 'Não autorizado' });
+    }
+
     const { numero, mensagem } = req.body;
-    if (!numero || !mensagem) { /* ... (erro 400) ... */ }
+
+    // 3. Resposta de erro 400 completa
+    if (!numero || !mensagem) {
+        console.warn(`[FALAR] Erro 400: 'numero' ou 'mensagem' faltando no body.`);
+        
+        // --- AQUI ESTÁ A CORREÇÃO ---
+        return res.status(400).send({ status: 'erro', mensagem: "Faltando 'numero' ou 'mensagem'" });
+    }
+
+    // Formata o ID do chat
     const chatId = numero.endsWith('@c.us') ? numero : `${numero}@c.us`;
-    client.sendMessage(chatId, mensagem).then(() => { /* ... (sucesso 200) ... */ }).catch(err => { /* ... (erro 500) ... */ });
+
+    try {
+        // 4. (MELHORIA PRINCIPAL) Verifica se o número existe no WhatsApp
+        const isRegistered = await client.isRegisteredUser(chatId);
+        
+        if (!isRegistered) {
+            console.warn(`[FALAR] Erro 404: Tentativa de enviar para número não registrado no WhatsApp: ${numero}`);
+            return res.status(404).send({ status: 'erro', mensagem: 'Número não encontrado no WhatsApp.' });
+        }
+
+        // 5. Envia a mensagem com 'await' e resposta 200 completa
+        await client.sendMessage(chatId, mensagem);
+        console.log(`[FALAR] Mensagem enviada com sucesso para ${numero}.`);
+        res.status(200).send({ status: 'sucesso', mensagem: 'Mensagem enviada.' });
+
+    } catch (err) {
+        // 6. Resposta de erro 500 completa com log
+        console.error(`[FALAR] ERRO 500 ao enviar mensagem para ${numero}:`, err.message);
+        res.status(500).send({ status: 'erro', mensagem: 'Falha ao enviar mensagem', detalhe: err.message });
+    }
 });
 
 // ========= 5. INICIALIZAÇÃO (Sem Mudança) =========
