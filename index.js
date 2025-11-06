@@ -419,13 +419,13 @@ app.use(express.json());
 
 // Middleware de log
 app.use((req, res, next) => {
-    console.log(`[EXPRESS] ${req.method} ${req.path}`);
+    // console.log(`[EXPRESS] ${req.method} ${req.path}`);
     next();
 });
 
 // ===== ROTA: Health Check + Cron Job =====
 app.get('/ping', async (req, res) => {
-    console.log('[HEALTH] Ping recebido!');
+    // console.log('[HEALTH] Ping recebido!');
 
     const dataAtual = new Date();
     const horaNoBrasil = new Date(
