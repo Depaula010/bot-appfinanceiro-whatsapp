@@ -6,7 +6,7 @@ const axios = require('axios');
 
 // --- NOVAS IMPORTAÇÕES PARA RemoteAuth ---
 const { Pool } = require('pg'); // Driver do PostgreSQL
-const { PgStore } = require('whatsapp-web.js-pg');
+const { PgStore } = require('wwebjs-pg');
 // --- FIM DAS NOVAS IMPORTAÇÕES ---
 
 const app = express();
