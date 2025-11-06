@@ -100,7 +100,6 @@ function useDatabaseAuthState(sessionId = 'baileys_session') {
     };
 
     // Escreve dados no banco
-    // [Substituir em index.js]
     const writeData = async (key, data) => {
         let dataValue;
 
@@ -109,7 +108,6 @@ function useDatabaseAuthState(sessionId = 'baileys_session') {
             dataValue = JSON.stringify(data);
         } else {
             // Chaves são Buffers, convertemos para Base64
-            // Baileys v6 usa Uint8Array, que o Buffer entende
             dataValue = Buffer.from(data).toString('base64');
         }
 
@@ -119,10 +117,9 @@ function useDatabaseAuthState(sessionId = 'baileys_session') {
             VALUES ($1, $2, $3)
             ON CONFLICT (session_id, data_key)
             DO UPDATE SET data_value = $3
-        `, [sessionId, key, dataValue]); // Usamos o dataValue processado
+        `, [sessionId, key, dataValue]);
 
-            // Não logue o 'data' para não expor chaves
-            // console.log(`[AUTH] ${key} salvo no banco.`);
+            // console.log(`[AUTH] ${key} salvo no banco.`); // Log removido para não poluir
         } catch (error) {
             console.error(`[AUTH] Erro ao salvar ${key}:`, error.message);
         }
