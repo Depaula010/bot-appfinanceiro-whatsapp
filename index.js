@@ -338,10 +338,11 @@ async function connectToWhatsApp() {
 
         // ===== EVENTO: Mensagens Recebidas =====
         sock.ev.on('messages.upsert', async (m) => {
+            let msg;
             try {
                 if (!m.messages || m.messages.length === 0) return;
 
-                const msg = m.messages[0];
+                msg = m.messages[0];
 
                 // Filtros: ignora mensagens do próprio bot, broadcasts, sem texto
                 if (!msg.message ||
