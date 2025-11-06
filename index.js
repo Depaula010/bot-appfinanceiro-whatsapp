@@ -84,6 +84,23 @@ class PgStore {
             console.error('[PgStore] ERRO AO DELETAR SESSÃO:', err);
         }
     }
+
+    // --- ADICIONE ESTE NOVO MÉTODO ABAIXO ---
+    async sessionExists() {
+        console.log(`[PgStore] Verificando se sessão existe: ${this.sessionName}`);
+        const query = 'SELECT 1 FROM wwebjs_auth_sessions WHERE session_name = $1 LIMIT 1;';
+
+        try {
+            const { rows } = await this.pool.query(query, [this.sessionName]);
+            const exists = rows.length > 0;
+            console.log(`[PgStore] Sessão existe? ${exists}`);
+            return exists;
+        } catch (err) {
+            console.error('[PgStore] ERRO AO VERIFICAR SESSÃO:', err);
+            return false;
+        }
+    }
+    // --- FIM DO NOVO MÉTODO ---
 }
 // --- FIM DO 'STORE' MANUAL ---
 
