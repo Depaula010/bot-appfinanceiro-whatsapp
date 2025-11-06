@@ -5,7 +5,8 @@ const {
     DisconnectReason,
     jidNormalizedUser,
     delay,
-    makeCacheableSignalKeyStore
+    makeCacheableSignalKeyStore,
+    initAuthCreds
 } = require('@whiskeysockets/baileys');
 const { Pool } = require('pg');
 const pino = require('pino');
@@ -127,17 +128,7 @@ function useDatabaseAuthState(sessionId = 'baileys_session') {
 
     // Carrega credenciais
     const loadCreds = async () => {
-        state.creds = await readData('creds') || {
-            noiseKey: null,
-            signedIdentityKey: null,
-            signedPreKey: null,
-            registrationId: null,
-            advSecretKey: null,
-            processedHistoryMessages: [],
-            nextPreKeyId: 0,
-            firstUnuploadedPreKeyId: 0,
-            accountSettings: { unarchiveChats: false }
-        };
+        state.creds = await readData('creds') || initAuthCreds();
     };
 
     // Salva credenciais
