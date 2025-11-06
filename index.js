@@ -3,6 +3,12 @@ const qrcode = require('qrcode-terminal');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const express = require('express');
 const axios = require('axios');
+
+// --- NOVAS IMPORTAÇÕES PARA RemoteAuth ---
+const { Pool } = require('pg'); // Driver do PostgreSQL
+const { PgStore } = require('whatsapp-web.js-pg');
+// --- FIM DAS NOVAS IMPORTAÇÕES ---
+
 const app = express();
 const port = process.env.PORT || 3000;
 let ultimoDiaExecutado = null;
@@ -10,15 +16,37 @@ let ultimoDiaExecutado = null;
 // ========= 1. CONFIGURAÇÕES =========
 const PYTHON_API_URL = 'https://app-controle-financeiro-oh32.onrender.com';
 const API_SECRET_KEY = process.env.API_SECRET_KEY || 'uma-senha-bem-forte-12345';
+// --- NOVA CONFIGURAÇÃO DE BANCO ---
+// A MESMA DATABASE_URL usada pelo seu app Python
+const DATABASE_URL = process.env.DATABASE_URL; 
 
-// ========= 2. CONFIGURAÇÃO DO BOT WHATSAPP (Sem Mudança) =========
-console.log("Iniciando cliente do WhatsApp...");
+if (!DATABASE_URL) {
+    console.error("ERRO CRÍTICO: Variável de ambiente DATABASE_URL não definida.");
+    process.exit(1);
+}
+
+const pool = new Pool({
+    connectionString: DATABASE_URL
+});
+
+const store = new PgStore({
+    pool: pool,
+    sessionName: 'bot-financeiro-sessao' // Um nome único para esta sessão
+});
+
+// ========= 2. CONFIGURAÇÃO DO BOT WHATSAPP (COM RemoteAuth) =========
+console.log("Iniciando cliente do WhatsApp com RemoteAuth (PostgreSQL)...");
 const client = new Client({
-    authStrategy: new LocalAuth(),
+    // SUBSTITUI LocalAuth POR RemoteAuth
+    authStrategy: new RemoteAuth({
+        store: store,
+        backupSyncIntervalMs: 300000 // Salva a sessão no DB a cada 5 minutos
+    }),
     puppeteer: {
         args: ['--no-sandbox', '--disable-setuid-sandbox'],
     }
 });
+
 client.on('qr', qr => { /* ... (código do QR) ... */ 
     console.log("========================================");
     console.log("LOGIN NECESSÁRIO: Escaneie com o celular que será o BOT:");
