@@ -82,15 +82,16 @@ function useDatabaseAuthState(sessionId = 'baileys_session') {
             );
 
             if (result.rows.length > 0) {
-                const dataValue = result.rows[0].data_value;
+                const dataValue = result.rows[0].data_value; // Isso é uma STRING
 
-                // Creds são JSON
-                if (key === 'creds') {
+                // Se a string salva começar com "{" ou "[", é JSON.
+                const firstChar = dataValue.substring(0, 1);
+                if (firstChar === '{' || firstChar === '[') {
                     return JSON.parse(dataValue);
-                } else {
-                    // Chaves são Base64, convertemos de volta para Buffer
-                    return Buffer.from(dataValue, 'base64');
                 }
+
+                // Se não for JSON, é um Buffer (salvo como Base64)
+                return Buffer.from(dataValue, 'base64');
             }
             return null;
         } catch (error) {
@@ -103,12 +104,12 @@ function useDatabaseAuthState(sessionId = 'baileys_session') {
     const writeData = async (key, data) => {
         let dataValue;
 
-        // Creds são JSON
-        if (key === 'creds') {
-            dataValue = JSON.stringify(data);
+        // Se for um Buffer, converte para Base64
+        if (Buffer.isBuffer(data)) {
+            dataValue = data.toString('base64');
         } else {
-            // Chaves são Buffers, convertemos para Base64
-            dataValue = Buffer.from(data).toString('base64');
+            // Se for JSON (creds, processed, etc.), apenas stringify
+            dataValue = JSON.stringify(data);
         }
 
         try {
@@ -119,7 +120,6 @@ function useDatabaseAuthState(sessionId = 'baileys_session') {
             DO UPDATE SET data_value = $3
         `, [sessionId, key, dataValue]);
 
-            // console.log(`[AUTH] ${key} salvo no banco.`); // Log removido para não poluir
         } catch (error) {
             console.error(`[AUTH] Erro ao salvar ${key}:`, error.message);
         }
@@ -248,7 +248,7 @@ async function connectToWhatsApp() {
             printQRInTerminal: false,
             auth: {
                 creds: state.creds,
-                keys: makeCacheableSignalKeyStore(state.keys, logger)
+                keys: state.keys
             },
             markOnlineOnConnect: true,
             syncFullHistory: false,
