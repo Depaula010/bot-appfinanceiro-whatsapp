@@ -3,11 +3,7 @@ const qrcode = require('qrcode-terminal');
 const { Client, RemoteAuth } = require('whatsapp-web.js');
 const express = require('express');
 const axios = require('axios');
-
-// --- NOVAS IMPORTAÇÕES PARA RemoteAuth ---
 const { Pool } = require('pg'); // Driver do PostgreSQL
-const { PgStore } = require('wwebjs-pg');
-// --- FIM DAS NOVAS IMPORTAÇÕES ---
 
 const app = express();
 const port = process.env.PORT || 3000;
