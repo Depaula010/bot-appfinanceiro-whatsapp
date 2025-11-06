@@ -82,8 +82,15 @@ function useDatabaseAuthState(sessionId = 'baileys_session') {
             );
 
             if (result.rows.length > 0) {
-                const data = JSON.parse(result.rows[0].data_value);
-                return data;
+                const dataValue = result.rows[0].data_value;
+
+                // Creds são JSON
+                if (key === 'creds') {
+                    return JSON.parse(dataValue);
+                } else {
+                    // Chaves são Base64, convertemos de volta para Buffer
+                    return Buffer.from(dataValue, 'base64');
+                }
             }
             return null;
         } catch (error) {
@@ -93,16 +100,29 @@ function useDatabaseAuthState(sessionId = 'baileys_session') {
     };
 
     // Escreve dados no banco
+    // [Substituir em index.js]
     const writeData = async (key, data) => {
+        let dataValue;
+
+        // Creds são JSON
+        if (key === 'creds') {
+            dataValue = JSON.stringify(data);
+        } else {
+            // Chaves são Buffers, convertemos para Base64
+            // Baileys v6 usa Uint8Array, que o Buffer entende
+            dataValue = Buffer.from(data).toString('base64');
+        }
+
         try {
             await pool.query(`
-                INSERT INTO baileys_auth (session_id, data_key, data_value)
-                VALUES ($1, $2, $3)
-                ON CONFLICT (session_id, data_key)
-                DO UPDATE SET data_value = $3
-            `, [sessionId, key, JSON.stringify(data)]);
+            INSERT INTO baileys_auth (session_id, data_key, data_value)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (session_id, data_key)
+            DO UPDATE SET data_value = $3
+        `, [sessionId, key, dataValue]); // Usamos o dataValue processado
 
-            console.log(`[AUTH] ${key} salvo no banco.`);
+            // Não logue o 'data' para não expor chaves
+            // console.log(`[AUTH] ${key} salvo no banco.`);
         } catch (error) {
             console.error(`[AUTH] Erro ao salvar ${key}:`, error.message);
         }
