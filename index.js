@@ -46,7 +46,31 @@ const pool = new Pool({
 let sock;
 const logger = pino({ level: process.env.LOG_LEVEL || 'warn' });
 
-// ========= 2. STORE DE AUTENTICAÇÃO NO POSTGRESQL =========
+// ========= 2. STORE DE AUTENTICAÇÃO NO POSTGRESQL (COM CORREÇÃO) =========
+
+/**
+ * (CORREÇÃO) Converte Buffers para Base64 ao salvar em JSON
+ */
+const replacer = (key, value) => {
+    if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
+        return {
+            type: 'Buffer',
+            data: value.toString('base64')
+        };
+    }
+    return value;
+};
+
+/**
+ * (CORREÇÃO) Converte Base64 de volta para Buffers ao ler JSON
+ */
+const reviver = (key, value) => {
+    if (typeof value === 'object' && value !== null && value.type === 'Buffer' && value.data) {
+        return Buffer.from(value.data, 'base64');
+    }
+    return value;
+};
+
 
 /**
  * Cria tabelas necessárias no banco
@@ -84,13 +108,13 @@ function useDatabaseAuthState(sessionId = 'baileys_session') {
             if (result.rows.length > 0) {
                 const dataValue = result.rows[0].data_value; // Isso é uma STRING
 
-                // Se a string salva começar com "{" ou "[", é JSON.
                 const firstChar = dataValue.substring(0, 1);
                 if (firstChar === '{' || firstChar === '[') {
-                    return JSON.parse(dataValue);
+                    // (CORREÇÃO) Usa o 'reviver' para restaurar Buffers
+                    return JSON.parse(dataValue, reviver);
                 }
 
-                // Se não for JSON, é um Buffer (salvo como Base64)
+                // (CORREÇÃO) Se não for JSON, é um Buffer salvo diretamente como Base64
                 return Buffer.from(dataValue, 'base64');
             }
             return null;
@@ -104,12 +128,12 @@ function useDatabaseAuthState(sessionId = 'baileys_session') {
     const writeData = async (key, data) => {
         let dataValue;
 
-        // Se for um Buffer, converte para Base64
+        // (CORREÇÃO) Se for um Buffer, converte para Base64
         if (Buffer.isBuffer(data)) {
             dataValue = data.toString('base64');
         } else {
-            // Se for JSON (creds, processed, etc.), apenas stringify
-            dataValue = JSON.stringify(data);
+            // (CORREÇÃO) Se for JSON, usa o 'replacer' para tratar Buffers internos
+            dataValue = JSON.stringify(data, replacer);
         }
 
         try {
