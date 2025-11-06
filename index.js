@@ -1,6 +1,6 @@
 // ========= 0. IMPORTAÇÕES =========
-const { 
-    default: makeWASocket, 
+const {
+    default: makeWASocket,
     fetchLatestBaileysVersion,
     DisconnectReason,
     jidNormalizedUser,
@@ -71,7 +71,7 @@ async function inicializarBanco() {
  * Implementação customizada do useAuthState usando PostgreSQL
  */
 function useDatabaseAuthState(sessionId = 'baileys_session') {
-    
+
     // Lê dados do banco
     const readData = async (key) => {
         try {
@@ -79,7 +79,7 @@ function useDatabaseAuthState(sessionId = 'baileys_session') {
                 'SELECT data_value FROM baileys_auth WHERE session_id = $1 AND data_key = $2',
                 [sessionId, key]
             );
-            
+
             if (result.rows.length > 0) {
                 const data = JSON.parse(result.rows[0].data_value);
                 return data;
@@ -100,7 +100,7 @@ function useDatabaseAuthState(sessionId = 'baileys_session') {
                 ON CONFLICT (session_id, data_key)
                 DO UPDATE SET data_value = $3
             `, [sessionId, key, JSON.stringify(data)]);
-            
+
             console.log(`[AUTH] ${key} salvo no banco.`);
         } catch (error) {
             console.error(`[AUTH] Erro ao salvar ${key}:`, error.message);
@@ -145,36 +145,37 @@ function useDatabaseAuthState(sessionId = 'baileys_session') {
         await writeData('creds', state.creds);
     };
 
-    return {
-        state: {
-            creds: state.creds,
-            keys: {
-                get: async (type, ids) => {
-                    const data = {};
-                    for (const id of ids) {
-                        const key = `${type}-${id}`;
-                        const value = await readData(key);
-                        if (value) {
-                            data[id] = value;
-                        }
-                    }
-                    return data;
-                },
-                set: async (data) => {
-                    for (const category in data) {
-                        for (const id in data[category]) {
-                            const key = `${category}-${id}`;
-                            const value = data[category][id];
-                            if (value) {
-                                await writeData(key, value);
-                            } else {
-                                await removeData(key);
-                            }
-                        }
+    // Define o 'get' e 'set' das chaves diretamente no objeto 'state.keys'
+    state.keys = {
+        get: async (type, ids) => {
+            const data = {};
+            for (const id of ids) {
+                const key = `${type}-${id}`;
+                const value = await readData(key);
+                if (value) {
+                    data[id] = value;
+                }
+            }
+            return data;
+        },
+        set: async (data) => {
+            for (const category in data) {
+                for (const id in data[category]) {
+                    const key = `${category}-${id}`;
+                    const value = data[category][id];
+                    if (value) {
+                        await writeData(key, value);
+                    } else {
+                        await removeData(key);
                     }
                 }
             }
-        },
+        }
+    };
+
+    // Agora, retorne o objeto 'state' principal
+    return {
+        state: state, // Retorna o objeto 'state' vivo, não um snapshot
         loadCreds,
         saveCreds
     };
@@ -199,13 +200,13 @@ async function notificarAdmin(mensagem) {
             console.warn('[ADMIN] Bot não está pronto para enviar notificação.');
             return;
         }
-        
+
         const adminChatId = formatarChatId(ADMIN_WHATSAPP_NUMBER);
         const fusoHorarioSP = { timeZone: 'America/Sao_Paulo' };
         const dataFormatada = new Date().toLocaleString('pt-BR', fusoHorarioSP);
-        
+
         const mensagemCompleta = `${mensagem}\n\n*Horário:* ${dataFormatada}`;
-        
+
         await sock.sendMessage(adminChatId, { text: mensagemCompleta });
         console.log('[ADMIN] Notificação enviada com sucesso.');
     } catch (error) {
@@ -217,17 +218,17 @@ async function notificarAdmin(mensagem) {
 
 async function connectToWhatsApp() {
     console.log('[BAILEYS] Iniciando conexão com o WhatsApp...');
-    
+
     try {
         // Inicializa banco de dados
         await inicializarBanco();
-        
+
         // Obtém estado de autenticação do PostgreSQL
         const { state, saveCreds, loadCreds } = useDatabaseAuthState('baileys_session');
-        
+
         // Carrega credenciais do banco
         await loadCreds();
-        
+
         // Obtém versão mais recente do WhatsApp Web
         const { version } = await fetchLatestBaileysVersion();
         console.log(`[BAILEYS] Usando WhatsApp Web v${version.join('.')}`);
@@ -268,11 +269,11 @@ async function connectToWhatsApp() {
             if (connection === 'close') {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
                 const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-                
+
                 console.warn(`[CONEXÃO] Fechada. Motivo: ${lastDisconnect?.error?.message || 'Desconhecido'}`);
                 console.warn(`[CONEXÃO] Status Code: ${statusCode}`);
                 console.warn(`[CONEXÃO] Reconectar: ${shouldReconnect}`);
-                
+
                 if (shouldReconnect) {
                     console.log('[CONEXÃO] Reconectando em 5 segundos...');
                     await delay(5000);
@@ -290,7 +291,7 @@ async function connectToWhatsApp() {
                 console.log('\n✅ *** BOT CONECTADO COM SUCESSO! ***');
                 console.log(`📱 Número: ${sock.user.id}`);
                 console.log(`👤 Nome: ${sock.user.name || 'N/A'}\n`);
-                
+
                 // Notifica admin após delay
                 setTimeout(() => {
                     notificarAdmin('✅ *Bot Financeiro Online*\n\nServiço conectado com sucesso ao WhatsApp!');
@@ -307,22 +308,22 @@ async function connectToWhatsApp() {
         sock.ev.on('messages.upsert', async (m) => {
             try {
                 if (!m.messages || m.messages.length === 0) return;
-                
+
                 const msg = m.messages[0];
-                
+
                 // Filtros: ignora mensagens do próprio bot, broadcasts, sem texto
-                if (!msg.message || 
-                    msg.key.fromMe || 
-                    !msg.key.remoteJid || 
+                if (!msg.message ||
+                    msg.key.fromMe ||
+                    !msg.key.remoteJid ||
                     msg.key.remoteJid === 'status@broadcast') {
                     return;
                 }
 
                 // Extrai texto da mensagem
-                const msgBody = msg.message.conversation || 
-                               msg.message.extendedTextMessage?.text || 
-                               '';
-                
+                const msgBody = msg.message.conversation ||
+                    msg.message.extendedTextMessage?.text ||
+                    '';
+
                 if (!msgBody) return;
 
                 const from = msg.key.remoteJid;
@@ -340,7 +341,7 @@ async function connectToWhatsApp() {
                         texto: msgBody,
                         numero_remetente: fromNumber
                     },
-                    { 
+                    {
                         headers: { 'x-api-key': API_SECRET_KEY },
                         timeout: 30000
                     }
@@ -353,15 +354,15 @@ async function connectToWhatsApp() {
 
                 // Envia resposta
                 if (response.data?.resposta) {
-                    await sock.sendMessage(from, { 
-                        text: response.data.resposta 
+                    await sock.sendMessage(from, {
+                        text: response.data.resposta
                     });
                     console.log(`[RESPOSTA] Enviada para ${fromNumber}`);
                 }
 
             } catch (error) {
                 console.error('[ERRO] Falha ao processar mensagem:', error.message);
-                
+
                 try {
                     await sock.sendMessage(msg.key.remoteJid, {
                         react: { text: '❌', key: msg.key }
@@ -409,22 +410,22 @@ app.get('/ping', async (req, res) => {
         axios.post(
             `${PYTHON_API_URL}/admin/run-motor-agendamentos`,
             {},
-            { 
+            {
                 headers: { 'x-api-key': API_SECRET_KEY },
                 timeout: 60000
             }
         )
-        .then(() => {
-            console.log('[MOTOR-CRON] Backend processou agendamentos com sucesso.');
-        })
-        .catch(error => {
-            console.error('[MOTOR-CRON] ERRO:', error.message);
-            ultimoDiaExecutado = null;
-        });
+            .then(() => {
+                console.log('[MOTOR-CRON] Backend processou agendamentos com sucesso.');
+            })
+            .catch(error => {
+                console.error('[MOTOR-CRON] ERRO:', error.message);
+                ultimoDiaExecutado = null;
+            });
     }
 
-    res.status(200).json({ 
-        status: 'ok', 
+    res.status(200).json({
+        status: 'ok',
         timestamp: new Date().toISOString(),
         bot_connected: !!(sock && sock.user)
     });
@@ -436,9 +437,9 @@ app.post('/enviar-mensagem', async (req, res) => {
 
     if (secret !== API_SECRET_KEY) {
         console.warn('[ENVIAR] Bloqueado: API Key inválida.');
-        return res.status(401).json({ 
-            status: 'erro', 
-            mensagem: 'Não autorizado' 
+        return res.status(401).json({
+            status: 'erro',
+            mensagem: 'Não autorizado'
         });
     }
 
@@ -446,17 +447,17 @@ app.post('/enviar-mensagem', async (req, res) => {
 
     if (!numero || !mensagem) {
         console.warn('[ENVIAR] Erro 400: Parâmetros faltando.');
-        return res.status(400).json({ 
-            status: 'erro', 
-            mensagem: "Parâmetros 'numero' e 'mensagem' são obrigatórios" 
+        return res.status(400).json({
+            status: 'erro',
+            mensagem: "Parâmetros 'numero' e 'mensagem' são obrigatórios"
         });
     }
 
     if (!sock || !sock.user) {
         console.warn('[ENVIAR] Erro 503: Bot não está conectado.');
-        return res.status(503).json({ 
-            status: 'erro', 
-            mensagem: 'Bot não está pronto. Aguarde a conexão.' 
+        return res.status(503).json({
+            status: 'erro',
+            mensagem: 'Bot não está pronto. Aguarde a conexão.'
         });
     }
 
@@ -465,30 +466,30 @@ app.post('/enviar-mensagem', async (req, res) => {
 
         // Verifica se o número existe no WhatsApp
         const [result] = await sock.onWhatsApp(chatId);
-        
+
         if (!result || !result.exists) {
             console.warn(`[ENVIAR] Erro 404: Número não registrado: ${numero}`);
-            return res.status(404).json({ 
-                status: 'erro', 
-                mensagem: 'Número não encontrado no WhatsApp.' 
+            return res.status(404).json({
+                status: 'erro',
+                mensagem: 'Número não encontrado no WhatsApp.'
             });
         }
 
         // Envia a mensagem
         await sock.sendMessage(chatId, { text: mensagem });
         console.log(`[ENVIAR] ✅ Mensagem enviada para ${numero}.`);
-        
-        res.status(200).json({ 
-            status: 'sucesso', 
-            mensagem: 'Mensagem enviada com sucesso.' 
+
+        res.status(200).json({
+            status: 'sucesso',
+            mensagem: 'Mensagem enviada com sucesso.'
         });
 
     } catch (err) {
         console.error(`[ENVIAR] Erro 500 ao enviar para ${numero}:`, err.message);
-        res.status(500).json({ 
-            status: 'erro', 
-            mensagem: 'Falha ao enviar mensagem', 
-            detalhe: err.message 
+        res.status(500).json({
+            status: 'erro',
+            mensagem: 'Falha ao enviar mensagem',
+            detalhe: err.message
         });
     }
 });
@@ -512,25 +513,25 @@ app.post('/limpar-sessao', async (req, res) => {
     const secret = req.headers['x-api-key'];
 
     if (secret !== API_SECRET_KEY) {
-        return res.status(401).json({ 
-            status: 'erro', 
-            mensagem: 'Não autorizado' 
+        return res.status(401).json({
+            status: 'erro',
+            mensagem: 'Não autorizado'
         });
     }
 
     try {
         await pool.query("DELETE FROM baileys_auth WHERE session_id = 'baileys_session'");
         console.log('[ADMIN] Sessão limpa do banco de dados.');
-        
-        res.status(200).json({ 
-            status: 'sucesso', 
-            mensagem: 'Sessão limpa. Reinicie o serviço para gerar novo QR Code.' 
+
+        res.status(200).json({
+            status: 'sucesso',
+            mensagem: 'Sessão limpa. Reinicie o serviço para gerar novo QR Code.'
         });
     } catch (error) {
         console.error('[ADMIN] Erro ao limpar sessão:', error.message);
-        res.status(500).json({ 
-            status: 'erro', 
-            mensagem: 'Falha ao limpar sessão' 
+        res.status(500).json({
+            status: 'erro',
+            mensagem: 'Falha ao limpar sessão'
         });
     }
 });
