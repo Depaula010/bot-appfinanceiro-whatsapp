@@ -19,8 +19,8 @@ const app = express();
 const port = process.env.PORT || 3000;
 let ultimoDiaExecutado = null;
 
-const ADMIN_WHATSAPP_NUMBER = '553194001072';
-const PYTHON_API_URL = 'https://app-controle-financeiro-oh32.onrender.com';
+const ADMIN_WHATSAPP_NUMBER = process.env.ADMIN_WHATSAPP_NUMBER;
+const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://localhost:8000';
 const API_SECRET_KEY = process.env.API_SECRET_KEY || 'uma-senha-bem-forte-12345';
 const DATABASE_URL = process.env.DATABASE_URL;
 
