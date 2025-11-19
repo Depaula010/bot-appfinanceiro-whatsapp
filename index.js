@@ -36,7 +36,7 @@ const DATABASE_URL = process.env.DATABASE_URL;
 // Configuração do Pool PostgreSQL
 const pool = new Pool({
     connectionString: DATABASE_URL,
-    ssl: { rejectUnauthorized: false },
+    ssl: false,
     max: 20,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 10000,
