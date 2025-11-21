@@ -416,7 +416,8 @@ async function connectToWhatsApp() {
 
 // ========= 5. SERVIDOR EXPRESS =========
 
-app.use(express.json());
+app.use(express.json({ limit: '50mb' })); // Aumenta limite para suportar imagens em base64
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // Middleware de log
 app.use((req, res, next) => {
@@ -522,6 +523,101 @@ app.post('/enviar-mensagem', async (req, res) => {
         res.status(500).json({
             status: 'erro',
             mensagem: 'Falha ao enviar mensagem',
+            detalhe: err.message
+        });
+    }
+});
+
+// ===== ROTA: Enviar Imagem =====
+app.post('/enviar-imagem', async (req, res) => {
+    const secret = req.headers['x-api-key'];
+
+    if (secret !== API_SECRET_KEY) {
+        console.warn('[ENVIAR-IMAGEM] Bloqueado: API Key inválida.');
+        return res.status(401).json({
+            status: 'erro',
+            mensagem: 'Não autorizado'
+        });
+    }
+
+    const { numero, imagem, legenda } = req.body;
+
+    // Validações
+    if (!numero) {
+        console.warn('[ENVIAR-IMAGEM] Erro 400: Campo "numero" faltando.');
+        return res.status(400).json({
+            status: 'erro',
+            mensagem: 'Campo "numero" é obrigatório'
+        });
+    }
+
+    if (!imagem) {
+        console.warn('[ENVIAR-IMAGEM] Erro 400: Campo "imagem" faltando.');
+        return res.status(400).json({
+            status: 'erro',
+            mensagem: 'Campo "imagem" é obrigatório (string base64)'
+        });
+    }
+
+    if (!sock || !sock.user) {
+        console.warn('[ENVIAR-IMAGEM] Erro 503: Bot não está conectado.');
+        return res.status(503).json({
+            status: 'erro',
+            mensagem: 'Bot não está pronto. Aguarde a conexão.'
+        });
+    }
+
+    try {
+        const chatId = formatarChatId(numero);
+
+        // Verifica se o número existe no WhatsApp
+        const [result] = await sock.onWhatsApp(chatId);
+
+        if (!result || !result.exists) {
+            console.warn(`[ENVIAR-IMAGEM] Erro 404: Número não registrado: ${numero}`);
+            return res.status(404).json({
+                status: 'erro',
+                mensagem: 'Número não encontrado no WhatsApp.'
+            });
+        }
+
+        // Converte base64 para buffer
+        let imageBuffer;
+        try {
+            // Remove o prefixo data:image/...;base64, se existir
+            const base64Data = imagem.replace(/^data:image\/\w+;base64,/, '');
+            imageBuffer = Buffer.from(base64Data, 'base64');
+            
+            // Valida se o buffer foi criado corretamente
+            if (imageBuffer.length === 0) {
+                throw new Error('Buffer vazio após conversão');
+            }
+        } catch (error) {
+            console.error(`[ENVIAR-IMAGEM] Erro ao converter base64: ${error.message}`);
+            return res.status(400).json({
+                status: 'erro',
+                mensagem: 'Imagem em formato base64 inválido'
+            });
+        }
+
+        // Envia a imagem
+        await sock.sendMessage(chatId, {
+            image: imageBuffer,
+            caption: legenda || ''
+        });
+
+        console.log(`[ENVIAR-IMAGEM] ✅ Imagem enviada para ${numero}`);
+
+        res.status(200).json({
+            status: 'sucesso',
+            mensagem: 'Imagem enviada com sucesso.'
+        });
+
+    } catch (err) {
+        console.error(`[ENVIAR-IMAGEM] Erro 500 ao enviar para ${numero}:`, err.message);
+        res.status(500).json({
+            status: 'erro',
+            mensagem: 'Falha ao enviar imagem',
             detalhe: err.message
         });
     }
