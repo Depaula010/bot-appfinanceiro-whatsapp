@@ -13,6 +13,7 @@ const pino = require('pino');
 const qrcode = require('qrcode-terminal');
 const express = require('express');
 const axios = require('axios');
+const crypto = require('crypto');
 
 // ========= 1. CONFIGURAÇÕES =========
 const app = express();
@@ -31,7 +32,13 @@ REQUIRED_ENV_VARS.forEach(varName => {
 const ADMIN_WHATSAPP_NUMBER = process.env.ADMIN_WHATSAPP_NUMBER;
 const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://localhost:8000';
 const API_SECRET_KEY = process.env.API_SECRET_KEY;
+const WEBHOOK_SIGNATURE_KEY = process.env.WEBHOOK_SIGNATURE_KEY || API_SECRET_KEY;
 const DATABASE_URL = process.env.DATABASE_URL;
+
+// Whitelist de números permitidos para receber mensagens (segurança)
+const ALLOWED_RECIPIENTS = process.env.ALLOWED_RECIPIENTS
+    ? process.env.ALLOWED_RECIPIENTS.split(',').map(n => n.trim())
+    : [ADMIN_WHATSAPP_NUMBER];
 
 // Configuração do Pool PostgreSQL
 const pool = new Pool({
@@ -45,6 +52,20 @@ const pool = new Pool({
 // Cliente do Baileys
 let sock;
 const logger = pino({ level: process.env.LOG_LEVEL || 'warn' });
+
+// ========= FUNÇÃO HELPER PARA HMAC =========
+/**
+ * Gera assinatura HMAC-SHA256 para webhook
+ * @param {object} payload - Objeto JSON a assinar
+ * @returns {string} Assinatura em hexadecimal
+ */
+function generateWebhookSignature(payload) {
+    const payloadString = JSON.stringify(payload);
+    return crypto
+        .createHmac('sha256', WEBHOOK_SIGNATURE_KEY)
+        .update(payloadString)
+        .digest('hex');
+}
 
 // ========= 2. STORE DE AUTENTICAÇÃO NO POSTGRESQL (COM CORREÇÃO) =========
 
@@ -367,15 +388,22 @@ async function connectToWhatsApp() {
                 // Marca como lida
                 await sock.readMessages([msg.key]);
 
-                // Envia para o backend Python
+                // Envia para o backend Python com assinatura HMAC
+                const webhookPayload = {
+                    texto: msgBody,
+                    numero_remetente: fromNumber
+                };
+                const signature = generateWebhookSignature(webhookPayload);
+
                 const response = await axios.post(
                     `${PYTHON_API_URL}/webhook-whatsapp`,
+                    webhookPayload,
                     {
-                        texto: msgBody,
-                        numero_remetente: fromNumber
-                    },
-                    {
-                        headers: { 'x-api-key': API_SECRET_KEY },
+                        headers: {
+                            'x-api-key': API_SECRET_KEY,
+                            'X-Webhook-Signature': signature,
+                            'Content-Type': 'application/json'
+                        },
                         timeout: 30000
                     }
                 );
@@ -484,6 +512,16 @@ app.post('/enviar-mensagem', async (req, res) => {
         return res.status(400).json({
             status: 'erro',
             mensagem: "Parâmetros 'numero' e 'mensagem' são obrigatórios"
+        });
+    }
+
+    // SEGURANÇA: Validar que o número está na whitelist
+    const numeroLimpo = numero.replace(/\D/g, '');
+    if (!ALLOWED_RECIPIENTS.includes(numeroLimpo)) {
+        console.warn(`[SECURITY] ⚠️  Tentativa de envio para número não autorizado: ${numeroLimpo}`);
+        return res.status(403).json({
+            status: 'erro',
+            mensagem: 'Número de destino não autorizado'
         });
     }
 
