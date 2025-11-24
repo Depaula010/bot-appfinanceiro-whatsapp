@@ -1,0 +1,41 @@
+services:
+  whatsapp-bot:
+    build: .
+    container_name: whatsapp-bot
+    restart: always
+    ports:
+      - "3000:3000"
+    depends_on:
+      - db
+    networks:
+      - rede-global   # <--- O Bot já devia ter isso
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - DATABASE_URL=postgresql://admin:senha123@db:5432/bot_whatsapp
+      - DB_SSL=false
+      - ADMIN_WHATSAPP_NUMBER=553194001072
+      - API_SECRET_KEY=37a31e83-907d-4074-8cca-be4417f2b20c
+      - PYTHON_API_URL=http://meu-secretario-api:8000
+
+  db:
+    image: postgres:15-alpine
+    container_name: postgres-bot   # <--- GARANTA QUE O NOME ESTÁ AQUI
+    restart: always
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=senha123
+      - POSTGRES_DB=bot_whatsapp
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - rede-global    # <--- ADICIONE ISSO AQUI!!!! (Faltava isso)
+
+volumes:
+  pgdata:
+
+networks:
+  rede-global:
+    external: true
