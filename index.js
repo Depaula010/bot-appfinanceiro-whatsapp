@@ -36,9 +36,13 @@ const WEBHOOK_SIGNATURE_KEY = process.env.WEBHOOK_SIGNATURE_KEY || API_SECRET_KE
 const DATABASE_URL = process.env.DATABASE_URL;
 
 // Whitelist de números permitidos para receber mensagens (segurança)
-const ALLOWED_RECIPIENTS = process.env.ALLOWED_RECIPIENTS
-    ? process.env.ALLOWED_RECIPIENTS.split(',').map(n => n.trim())
-    : [ADMIN_WHATSAPP_NUMBER];
+// Modos:
+// - Lista específica: ALLOWED_RECIPIENTS=5511999998888,5511988887777
+// - Modo SaaS (permite qualquer número cadastrado): ALLOWED_RECIPIENTS=*
+const ALLOWED_RECIPIENTS_RAW = process.env.ALLOWED_RECIPIENTS || ADMIN_WHATSAPP_NUMBER;
+const ALLOWED_RECIPIENTS = ALLOWED_RECIPIENTS_RAW === '*'
+    ? ['*']  // Modo SaaS: qualquer número cadastrado
+    : ALLOWED_RECIPIENTS_RAW.split(',').map(n => n.trim());
 
 // Configuração do Pool PostgreSQL
 const pool = new Pool({
@@ -515,13 +519,39 @@ app.post('/enviar-mensagem', async (req, res) => {
         });
     }
 
-    // SEGURANÇA: Validar que o número está na whitelist
+    // SEGURANÇA: Validar que o número está autorizado
     const numeroLimpo = numero.replace(/\D/g, '');
-    if (!ALLOWED_RECIPIENTS.includes(numeroLimpo)) {
+
+    // Modo SaaS: Se ALLOWED_RECIPIENTS='*', validar se número está cadastrado no banco
+    if (ALLOWED_RECIPIENTS.includes('*')) {
+        try {
+            const result = await pool.query(
+                'SELECT id FROM usuarios WHERE numero_whatsapp = $1',
+                [numeroLimpo]
+            );
+
+            if (result.rows.length === 0) {
+                console.warn(`[SECURITY] ⚠️  Tentativa de envio para número não cadastrado (modo SaaS): ${numeroLimpo}`);
+                return res.status(403).json({
+                    status: 'erro',
+                    mensagem: 'Número não cadastrado no sistema'
+                });
+            }
+            console.log(`[SECURITY] ✅ Número ${numeroLimpo} validado (cadastrado no sistema)`);
+        } catch (error) {
+            console.error('[SECURITY] Erro ao validar número no banco:', error);
+            return res.status(500).json({
+                status: 'erro',
+                mensagem: 'Erro ao validar destinatário'
+            });
+        }
+    }
+    // Modo Pessoal: Validar contra whitelist fixa
+    else if (!ALLOWED_RECIPIENTS.includes(numeroLimpo)) {
         console.warn(`[SECURITY] ⚠️  Tentativa de envio para número não autorizado: ${numeroLimpo}`);
         return res.status(403).json({
             status: 'erro',
-            mensagem: 'Número de destino não autorizado'
+            mensagem: 'Número não está na lista de destinatários autorizados'
         });
     }
 

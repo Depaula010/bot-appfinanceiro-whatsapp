@@ -1,0 +1,49 @@
+name: Deploy Automatizado Contabo
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 🚚 Conectar e Atualizar via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_PRIVATE_KEY }}
+          port: 22
+          script: |
+            # 1. Entrar na pasta do projeto
+            cd /root/bot-whatsapp-financial
+            
+            # 2. Atualizar o código (git pull)
+            # Como a chave pública está configurada no Repo, ele tem permissão de leitura
+            git pull origin main
+            
+            # 3. Garantir que a rede externa existe (evita erro no docker-compose)
+            docker network create rede-global || true
+            
+            # 4. Recriar os containers com a nova versão
+            # --build: força recriar a imagem se houve mudança no código
+            docker compose -f docker.composer.yml up -d --build --remove-orphans
+            
+            # 5. Limpar imagens antigas para não lotar o disco da Contabo
+            docker image prune -f
+
+      # --- OPCIONAL: Notificação no WhatsApp ---
+      # Para funcionar, crie mais dois Secrets: 
+      # 1. API_SECRET_KEY (A mesma do seu .env)
+      # 2. ADMIN_PHONE (Seu número, ex: 5511999998888)
+      - name: 📱 Notificar WhatsApp
+        if: success() # Só roda se o deploy deu certo
+        run: |
+          curl -X POST http://${{ secrets.VPS_HOST }}:3000/enviar-mensagem \
+          -H "Content-Type: application/json" \
+          -H "x-api-key: ${{ secrets.API_SECRET_KEY }}" \
+          -d '{"numero": "${{ secrets.ADMIN_PHONE }}", "mensagem": "🚀 *Deploy Concluído!*\n\nUma nova versão do Bot Financeiro foi instalada com sucesso no servidor."}'
+        continue-on-error: true
