@@ -21,7 +21,7 @@ services:
 
   db:
     image: postgres:15-alpine
-    container_name: postgres-bot   # <--- GARANTA QUE O NOME ESTÁ AQUI
+    container_name: postgres-central   # <--- GARANTA QUE O NOME ESTÁ AQUI
     restart: always
     ports:
       - "5432:5432"
