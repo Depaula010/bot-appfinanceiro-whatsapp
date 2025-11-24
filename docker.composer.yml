@@ -5,13 +5,12 @@ services:
     restart: always
     ports:
       - "3000:3000"
-    depends_on:
-      - db
     networks:
-      - rede-global   # <--- O Bot já devia ter isso
+      - rede-global
     environment:
       - NODE_ENV=production
       - PORT=3000
+      # A URL agora aponta para o postgres-central (definido no seu .env)
       - DATABASE_URL=${DATABASE_URL}
       - DB_SSL=${DB_SSL:-false}
       - ADMIN_WHATSAPP_NUMBER=${ADMIN_WHATSAPP_NUMBER}
@@ -19,24 +18,7 @@ services:
       - WEBHOOK_SIGNATURE_KEY=${WEBHOOK_SIGNATURE_KEY}
       - PYTHON_API_URL=${PYTHON_API_URL:-http://meu-secretario-api:8000}
 
-  db:
-    image: postgres:15-alpine
-    container_name: postgres-central   # <--- GARANTA QUE O NOME ESTÁ AQUI
-    restart: always
-    ports:
-      - "5432:5432"
-    environment:
-      - POSTGRES_USER=${POSTGRES_USER:-admin}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_DB=${POSTGRES_DB:-bot_whatsapp}
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    networks:
-      - rede-global    # <--- ADICIONE ISSO AQUI!!!! (Faltava isso)
-
-volumes:
-  pgdata:
-
+# A rede global é necessária para ele "ver" o postgres-central
 networks:
   rede-global:
     external: true
