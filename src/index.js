@@ -360,39 +360,51 @@ app.use((err, req, res, next) => {
 
 async function startServer() {
     try {
-        logger.info('🚀 Iniciando WhatsApp Bot API (Multi-Session)...');
+        console.log('🚀 Iniciando WhatsApp Bot API (Multi-Session)...');
+        console.log(`📋 LOG_LEVEL: ${process.env.LOG_LEVEL || 'warn (default)'}`);
 
         // Testar conexão com banco
-        logger.info('📡 Testando conexão com PostgreSQL...');
+        console.log('📡 Testando conexão com PostgreSQL...');
         const dbConnected = await testConnection();
 
         if (!dbConnected) {
             throw new Error('Falha ao conectar com PostgreSQL');
         }
+        console.log('✅ Conexão com PostgreSQL OK');
 
         // Restaurar sessões ativas
-        logger.info('🔄 Restaurando sessões ativas...');
+        console.log('🔄 Buscando sessões para restaurar...');
         const activeSessions = await Session.findAll({ status: ['connected', 'connecting'] });
 
-        logger.info(`Encontradas ${activeSessions.length} sessões para restaurar`);
+        console.log(`📊 Encontradas ${activeSessions.length} sessões para restaurar`);
 
         for (const session of activeSessions) {
             try {
+                console.log(`🔗 Restaurando sessão: ${session.id} (${session.session_name})`);
                 await sessionManager.createSession(session.id);
-                logger.info({ sessionId: session.id }, 'Sessão restaurada');
+                console.log(`✅ Sessão ${session.session_name} restaurada`);
             } catch (error) {
+                console.error(`❌ Erro ao restaurar sessão ${session.id}:`, error.message);
                 logger.error({ err: error, sessionId: session.id }, 'Erro ao restaurar sessão');
             }
         }
 
-        // Iniciar servidor
+        // Iniciar servidor HTTP
         app.listen(port, () => {
-            logger.info(`✅ Servidor rodando na porta ${port}`);
-            logger.info(`📚 Documentação: http://localhost:${port}/api/v1/docs`);
-            logger.info(`❤️  Health check: http://localhost:${port}/health`);
-            logger.info('\n🎉 WhatsApp Bot API pronto para uso!\n');
+            console.log('');
+            console.log('========================================');
+            console.log(`✅ Servidor rodando na porta ${port}`);
+            console.log(`❤️  Health check: http://localhost:${port}/health`);
+            console.log('========================================');
+            console.log('');
+
+            if (activeSessions.length === 0) {
+                console.log('⚠️  ATENÇÃO: Nenhuma sessão encontrada para restaurar!');
+                console.log('   Use a API para criar uma nova sessão.');
+            }
         });
     } catch (error) {
+        console.error('❌ Falha ao iniciar servidor:', error);
         logger.error({ err: error }, '❌ Falha ao iniciar servidor');
         process.exit(1);
     }
