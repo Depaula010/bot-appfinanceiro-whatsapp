@@ -30,6 +30,7 @@
     "express-rate-limit": "^7.1.5",
     "pg": "^8.11.3",
     "pino": "^9.1.0",
+    "qrcode": "^1.5.4",
     "qrcode-terminal": "^0.12.0"
   },
   "devDependencies": {
