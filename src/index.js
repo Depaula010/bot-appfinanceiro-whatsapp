@@ -399,25 +399,44 @@ async function startServer() {
 }
 
 // Graceful shutdown
-process.on('SIGTERM', async () => {
-    logger.info('Recebido SIGTERM, encerrando gracefully...');
+let isShuttingDown = false;
 
-    // Desconectar todas as sessões
-    const sessions = Array.from(sessionManager.activeSessions.keys());
-    for (const sessionId of sessions) {
-        await sessionManager.disconnectSession(sessionId);
+async function gracefulShutdown(signal) {
+    if (isShuttingDown) {
+        logger.info(`${signal} recebido novamente, forçando saída...`);
+        process.exit(1);
     }
 
-    // Fechar pool
-    await pool.end();
+    isShuttingDown = true;
+    logger.info(`Recebido ${signal}, encerrando gracefully...`);
 
-    process.exit(0);
-});
+    try {
+        // 1. Desconectar todas as sessões WhatsApp
+        const sessions = Array.from(sessionManager.activeSessions.keys());
+        logger.info(`Desconectando ${sessions.length} sessões...`);
 
-process.on('SIGINT', async () => {
-    logger.info('Recebido SIGINT, encerrando...');
-    process.exit(0);
-});
+        for (const sessionId of sessions) {
+            try {
+                await sessionManager.disconnectSession(sessionId);
+            } catch (error) {
+                logger.error({ err: error, sessionId }, 'Erro ao desconectar sessão');
+            }
+        }
+
+        // 2. Fechar pool de conexões (após todas as sessões desconectadas)
+        const { closePool } = require('./config/database');
+        await closePool();
+
+        logger.info('✅ Shutdown completo');
+        process.exit(0);
+    } catch (error) {
+        logger.error({ err: error }, 'Erro durante shutdown');
+        process.exit(1);
+    }
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 // Iniciar se for módulo principal
 if (require.main === module) {

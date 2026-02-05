@@ -80,15 +80,8 @@ async function closePool() {
     logger.info('✅ Pool PostgreSQL fechado');
 }
 
-// Graceful shutdown
-process.on('SIGTERM', async () => {
-    await closePool();
-});
-
-process.on('SIGINT', async () => {
-    await closePool();
-    process.exit(0);
-});
+// NOTA: O graceful shutdown é gerenciado pelo index.js
+// para garantir a ordem correta de fechamento (sessões primeiro, depois pool)
 
 module.exports = {
     pool,
