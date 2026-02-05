@@ -16,6 +16,7 @@ const Session = require('../models/session');
 const { pool } = require('../config/database');
 const { generateWebhookSignature } = require('../utils/crypto');
 const { formatarChatId, extrairNumero, isBroadcast } = require('../utils/formatting');
+const qrcode = require('qrcode-terminal');
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'warn' });
 
@@ -126,6 +127,14 @@ class SessionManager {
 
                 // Salvar QR no banco
                 await Session.updateQR(sessionId, qr, expiresAt);
+
+                // === INÍCIO DA ALTERAÇÃO: IMPRIMIR NO TERMINAL ===
+                console.log('\n========================================');
+                console.log('🔐 ESCANEIE O QR CODE ABAIXO:');
+                console.log('Sessão: ' + config.session_name);
+                qrcode.generate(qr, { small: true });
+                console.log('========================================\n');
+                // === FIM DA ALTERAÇÃO ===
 
                 // Log
                 await this.logEvent(sessionId, 'qr_generated', {
@@ -300,7 +309,7 @@ class SessionManager {
             if (sock && msg.key) {
                 await sock.sendMessage(msg.key.remoteJid, {
                     react: { text: '❌', key: msg.key }
-                }).catch(() => {});
+                }).catch(() => { });
             }
 
             // Log erro
