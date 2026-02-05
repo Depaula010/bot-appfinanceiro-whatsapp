@@ -1,34 +1,13 @@
 // ========================================
-// Auth State para Baileys (Multi-Sessão)
+// Auth State para Baileys (Multi-Sessão) - CORRIGIDO
 // ========================================
 // Gerencia estado de autenticação do Baileys no PostgreSQL por session_uuid
 
-const { initAuthCreds, makeCacheableSignalKeyStore } = require('@whiskeysockets/baileys');
+const { initAuthCreds, makeCacheableSignalKeyStore, BufferJSON } = require('@whiskeysockets/baileys');
 const { pool } = require('../config/database');
 const pino = require('pino');
 
-/**
- * Converte Buffers para Base64 ao salvar em JSON
- */
-const replacer = (key, value) => {
-    if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
-        return {
-            type: 'Buffer',
-            data: value.toString('base64')
-        };
-    }
-    return value;
-};
-
-/**
- * Converte Base64 de volta para Buffers ao ler JSON
- */
-const reviver = (key, value) => {
-    if (typeof value === 'object' && value !== null && value.type === 'Buffer' && value.data) {
-        return Buffer.from(value.data, 'base64');
-    }
-    return value;
-};
+const logger = pino({ level: process.env.LOG_LEVEL || 'warn' });
 
 /**
  * Cria auth state para uma sessão específica
@@ -41,27 +20,42 @@ async function createAuthState(sessionUuid) {
     // Identificador para a coluna session_id (NOT NULL, legado)
     const sessionId = `session_${sessionUuid}`;
 
-    // Inicializar credenciais vazias
-    let creds = initAuthCreds();
-    let keys = {};
+    // Objeto que mantém referência mutável das credenciais
+    const authState = {
+        creds: initAuthCreds(),
+        keys: {}
+    };
 
     /**
      * Upsert genérico: UPDATE primeiro, INSERT se não existir
-     * Evita problemas com ON CONFLICT em colunas nullable
+     * Com retry para evitar race conditions
      */
-    const upsertAuthData = async (dataKey, dataValue) => {
-        const updateResult = await pool.query(
-            `UPDATE baileys_auth SET data_value = $3, updated_at = NOW()
-             WHERE session_uuid = $1 AND data_key = $2`,
-            [sessionUuid, dataKey, dataValue]
-        );
+    const upsertAuthData = async (dataKey, dataValue, retries = 3) => {
+        for (let attempt = 1; attempt <= retries; attempt++) {
+            try {
+                const updateResult = await pool.query(
+                    `UPDATE baileys_auth SET data_value = $3, updated_at = NOW()
+                     WHERE session_uuid = $1 AND data_key = $2`,
+                    [sessionUuid, dataKey, dataValue]
+                );
 
-        if (updateResult.rowCount === 0) {
-            await pool.query(
-                `INSERT INTO baileys_auth (session_id, session_uuid, data_key, data_value)
-                 VALUES ($1, $2, $3, $4)`,
-                [sessionId, sessionUuid, dataKey, dataValue]
-            );
+                if (updateResult.rowCount === 0) {
+                    await pool.query(
+                        `INSERT INTO baileys_auth (session_id, session_uuid, data_key, data_value)
+                         VALUES ($1, $2, $3, $4)
+                         ON CONFLICT (session_uuid, data_key) DO UPDATE SET data_value = $4, updated_at = NOW()`,
+                        [sessionId, sessionUuid, dataKey, dataValue]
+                    );
+                }
+                return; // Sucesso, sai do loop
+            } catch (error) {
+                if (error.code === '23505' && attempt < retries) {
+                    // Duplicate key - tentar novamente com UPDATE
+                    logger.debug({ dataKey, attempt }, 'Retrying upsert due to race condition');
+                    continue;
+                }
+                throw error;
+            }
         }
     };
 
@@ -69,44 +63,65 @@ async function createAuthState(sessionUuid) {
      * Carrega credenciais do banco de dados
      */
     const loadCreds = async () => {
-        const result = await pool.query(
-            `SELECT data_key, data_value
-             FROM baileys_auth
-             WHERE session_uuid = $1`,
-            [sessionUuid]
-        );
+        try {
+            const result = await pool.query(
+                `SELECT data_key, data_value
+                 FROM baileys_auth
+                 WHERE session_uuid = $1`,
+                [sessionUuid]
+            );
 
-        for (const row of result.rows) {
-            const { data_key, data_value } = row;
+            for (const row of result.rows) {
+                const { data_key, data_value } = row;
 
-            if (!data_value) continue;
+                if (!data_value) continue;
 
-            const parsedValue = JSON.parse(data_value, reviver);
+                try {
+                    // Usar BufferJSON.parse do Baileys para deserialização correta
+                    const parsedValue = JSON.parse(data_value, BufferJSON.reviver);
 
-            if (data_key === 'creds') {
-                creds = parsedValue;
-            } else if (data_key.startsWith('key-')) {
-                // Estrutura de keys do Baileys
-                const keyPath = data_key.replace('key-', '').split('-');
-                let target = keys;
+                    if (data_key === 'creds') {
+                        // Mesclar com creds existentes (mantém campos que não foram salvos)
+                        Object.assign(authState.creds, parsedValue);
+                    } else if (data_key.startsWith('key-')) {
+                        // Estrutura de keys do Baileys
+                        const keyPath = data_key.replace('key-', '').split('-');
+                        let target = authState.keys;
 
-                for (let i = 0; i < keyPath.length - 1; i++) {
-                    if (!target[keyPath[i]]) {
-                        target[keyPath[i]] = {};
+                        for (let i = 0; i < keyPath.length - 1; i++) {
+                            if (!target[keyPath[i]]) {
+                                target[keyPath[i]] = {};
+                            }
+                            target = target[keyPath[i]];
+                        }
+
+                        target[keyPath[keyPath.length - 1]] = parsedValue;
                     }
-                    target = target[keyPath[i]];
+                } catch (parseError) {
+                    logger.error({ err: parseError, dataKey: data_key }, 'Erro ao parsear auth data - ignorando');
                 }
-
-                target[keyPath[keyPath.length - 1]] = parsedValue;
             }
+
+            logger.debug({ sessionUuid, keysLoaded: result.rows.length }, 'Auth state carregado');
+        } catch (error) {
+            logger.error({ err: error, sessionUuid }, 'Erro ao carregar auth state');
+            throw error;
         }
     };
 
     /**
      * Salva as credenciais no banco de dados
+     * CRÍTICO: Usa BufferJSON.stringify para serialização correta de Buffers
      */
     const saveCreds = async () => {
-        await upsertAuthData('creds', JSON.stringify(creds, replacer));
+        try {
+            const serializedCreds = JSON.stringify(authState.creds, BufferJSON.replacer);
+            await upsertAuthData('creds', serializedCreds);
+            logger.debug({ sessionUuid }, 'Credenciais salvas com sucesso');
+        } catch (error) {
+            logger.error({ err: error, sessionUuid }, 'ERRO CRÍTICO ao salvar credenciais');
+            // Não lançar erro para não interromper o fluxo do Baileys
+        }
     };
 
     /**
@@ -117,15 +132,19 @@ async function createAuthState(sessionUuid) {
     const saveKey = async (keyPath, value) => {
         const dataKey = `key-${keyPath}`;
 
-        if (value === null || value === undefined) {
-            // Deletar chave
-            await pool.query(
-                `DELETE FROM baileys_auth WHERE session_uuid = $1 AND data_key = $2`,
-                [sessionUuid, dataKey]
-            );
-        } else {
-            // Inserir/atualizar chave
-            await upsertAuthData(dataKey, JSON.stringify(value, replacer));
+        try {
+            if (value === null || value === undefined) {
+                // Deletar chave
+                await pool.query(
+                    `DELETE FROM baileys_auth WHERE session_uuid = $1 AND data_key = $2`,
+                    [sessionUuid, dataKey]
+                );
+            } else {
+                // Inserir/atualizar chave com BufferJSON
+                await upsertAuthData(dataKey, JSON.stringify(value, BufferJSON.replacer));
+            }
+        } catch (error) {
+            logger.error({ err: error, keyPath }, 'Erro ao salvar key');
         }
     };
 
@@ -139,8 +158,10 @@ async function createAuthState(sessionUuid) {
         );
 
         // Resetar para valores iniciais
-        creds = initAuthCreds();
-        keys = {};
+        authState.creds = initAuthCreds();
+        authState.keys = {};
+
+        logger.info({ sessionUuid }, 'Auth state limpo');
     };
 
     // Criar signal key store com cache
@@ -151,10 +172,10 @@ async function createAuthState(sessionUuid) {
                 for (const id of ids) {
                     const keyPath = `${type}.${id}`;
                     const parts = keyPath.split('.');
-                    let target = keys;
+                    let target = authState.keys;
 
                     for (const part of parts) {
-                        if (target[part] !== undefined) {
+                        if (target && target[part] !== undefined) {
                             target = target[part];
                         } else {
                             target = undefined;
@@ -169,21 +190,27 @@ async function createAuthState(sessionUuid) {
                 return data;
             },
             set: async (data) => {
+                // Processar todas as keys em batch para evitar race conditions
+                const savePromises = [];
+
                 for (const category in data) {
                     for (const id in data[category]) {
-                        const keyPath = `${category}.${id}`;
+                        const keyPath = `${category}-${id}`;
                         const value = data[category][id];
 
-                        // Atualizar em memória
-                        if (!keys[category]) {
-                            keys[category] = {};
+                        // Atualizar em memória primeiro
+                        if (!authState.keys[category]) {
+                            authState.keys[category] = {};
                         }
-                        keys[category][id] = value;
+                        authState.keys[category][id] = value;
 
-                        // Salvar no banco
-                        await saveKey(keyPath, value);
+                        // Agendar salvamento no banco
+                        savePromises.push(saveKey(keyPath, value));
                     }
                 }
+
+                // Esperar todos os salvamentos completarem
+                await Promise.allSettled(savePromises);
             }
         },
         pino({ level: 'silent' }) // Logger silencioso para key store
@@ -191,7 +218,7 @@ async function createAuthState(sessionUuid) {
 
     return {
         state: {
-            creds,
+            creds: authState.creds,
             keys: signalKeyStore
         },
         saveCreds,
@@ -225,6 +252,7 @@ async function removeAuthState(sessionUuid) {
         `DELETE FROM baileys_auth WHERE session_uuid = $1`,
         [sessionUuid]
     );
+    logger.info({ sessionUuid }, 'Auth state removido');
 }
 
 module.exports = {

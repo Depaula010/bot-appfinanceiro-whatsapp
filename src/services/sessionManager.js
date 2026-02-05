@@ -50,28 +50,57 @@ class SessionManager {
             await loadCreds();
 
             const { version } = await fetchLatestBaileysVersion();
+            logger.info({ sessionId, version: version.join('.') }, 'Versão do Baileys obtida');
 
             const sock = makeWASocket({
                 version,
-                logger: pino({ level: 'warn' }),
+                logger: pino({ level: process.env.BAILEYS_LOG_LEVEL || 'warn' }),
                 printQRInTerminal: false, // Desligado nativo para usarmos o qrcode-terminal
                 auth: {
                     creds: state.creds,
                     keys: state.keys
                 },
                 browser: ['WhatsApp Bot API', 'Chrome', '1.0.0'],
-                getMessage: async () => ({ conversation: '' })
+
+                // === CONFIGURAÇÕES DE ESTABILIDADE ===
+                syncFullHistory: false, // Não sincroniza histórico completo (evita 515)
+                markOnlineOnConnect: false, // Não marca online imediatamente
+                connectTimeoutMs: 60000, // Timeout de 60s para conexão
+                defaultQueryTimeoutMs: 30000, // Timeout para queries
+                keepAliveIntervalMs: 25000, // Intervalo de keep-alive
+                retryRequestDelayMs: 500, // Delay entre retries
+
+                getMessage: async (key) => {
+                    // Retorna mensagem vazia para evitar erros de "message not found"
+                    return { conversation: '' };
+                }
             });
 
-            // Listeners de Eventos
+            // === LISTENERS DE EVENTOS ===
+
+            // Handler de conexão
             sock.ev.on('connection.update', async (update) => {
                 await this.handleConnectionUpdate(sessionId, update, sessionConfig);
             });
 
-            sock.ev.on('creds.update', saveCreds);
+            // Handler de credenciais - CRÍTICO para manter sessão
+            sock.ev.on('creds.update', async () => {
+                try {
+                    await saveCreds();
+                    logger.debug({ sessionId }, 'Credenciais atualizadas e salvas');
+                } catch (error) {
+                    logger.error({ err: error, sessionId }, 'ERRO ao salvar credenciais');
+                }
+            });
 
+            // Handler de mensagens
             sock.ev.on('messages.upsert', async (m) => {
                 await this.handleIncomingMessage(sessionId, m, sessionConfig);
+            });
+
+            // Handler de erros do WebSocket (novo)
+            sock.ws.on('error', (error) => {
+                logger.error({ err: error, sessionId }, 'Erro no WebSocket');
             });
 
             // Adiciona na memória
