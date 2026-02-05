@@ -38,16 +38,39 @@ const reviver = (key, value) => {
  * @returns {Promise<{state: {creds: any, keys: any}, saveCreds: Function, loadCreds: Function, clearCreds: Function}>}
  */
 async function createAuthState(sessionUuid) {
+    // Identificador para a coluna session_id (NOT NULL, legado)
+    const sessionId = `session_${sessionUuid}`;
+
     // Inicializar credenciais vazias
     let creds = initAuthCreds();
     let keys = {};
+
+    /**
+     * Upsert genérico: UPDATE primeiro, INSERT se não existir
+     * Evita problemas com ON CONFLICT em colunas nullable
+     */
+    const upsertAuthData = async (dataKey, dataValue) => {
+        const updateResult = await pool.query(
+            `UPDATE baileys_auth SET data_value = $3, updated_at = NOW()
+             WHERE session_uuid = $1 AND data_key = $2`,
+            [sessionUuid, dataKey, dataValue]
+        );
+
+        if (updateResult.rowCount === 0) {
+            await pool.query(
+                `INSERT INTO baileys_auth (session_id, session_uuid, data_key, data_value)
+                 VALUES ($1, $2, $3, $4)`,
+                [sessionId, sessionUuid, dataKey, dataValue]
+            );
+        }
+    };
 
     /**
      * Carrega credenciais do banco de dados
      */
     const loadCreds = async () => {
         const result = await pool.query(
-            `SELECT session_id, data_key, data_value
+            `SELECT data_key, data_value
              FROM baileys_auth
              WHERE session_uuid = $1`,
             [sessionUuid]
@@ -83,14 +106,7 @@ async function createAuthState(sessionUuid) {
      * Salva as credenciais no banco de dados
      */
     const saveCreds = async () => {
-        // Salvar creds
-        await pool.query(
-            `INSERT INTO baileys_auth (session_uuid, data_key, data_value)
-             VALUES ($1, $2, $3)
-             ON CONFLICT (session_uuid, data_key)
-             DO UPDATE SET data_value = EXCLUDED.data_value`,
-            [sessionUuid, 'creds', JSON.stringify(creds, replacer)]
-        );
+        await upsertAuthData('creds', JSON.stringify(creds, replacer));
     };
 
     /**
@@ -109,13 +125,7 @@ async function createAuthState(sessionUuid) {
             );
         } else {
             // Inserir/atualizar chave
-            await pool.query(
-                `INSERT INTO baileys_auth (session_uuid, data_key, data_value)
-                 VALUES ($1, $2, $3)
-                 ON CONFLICT (session_uuid, data_key)
-                 DO UPDATE SET data_value = EXCLUDED.data_value`,
-                [sessionUuid, dataKey, JSON.stringify(value, replacer)]
-            );
+            await upsertAuthData(dataKey, JSON.stringify(value, replacer));
         }
     };
 

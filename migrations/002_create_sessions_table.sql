@@ -44,6 +44,10 @@ ALTER TABLE baileys_auth DROP CONSTRAINT IF EXISTS fk_session;
 ALTER TABLE baileys_auth ADD CONSTRAINT fk_session
     FOREIGN KEY (session_uuid) REFERENCES sessions(id) ON DELETE CASCADE;
 
+-- Unique constraint necessário para ON CONFLICT (session_uuid, data_key) no authState.js
+CREATE UNIQUE INDEX IF NOT EXISTS idx_baileys_auth_session_uuid_data_key
+    ON baileys_auth (session_uuid, data_key);
+
 -- Comentários
 COMMENT ON TABLE sessions IS 'Armazena configurações e status de sessões WhatsApp';
 COMMENT ON COLUMN sessions.session_name IS 'Nome único da sessão (ex: cliente-production)';
