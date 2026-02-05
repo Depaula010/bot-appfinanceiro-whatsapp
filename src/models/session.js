@@ -91,9 +91,17 @@ async function findAll(filters = {}) {
     }
 
     if (filters.status) {
-        query += ` AND status = $${paramCount}`;
-        params.push(filters.status);
-        paramCount++;
+        // Suporta array de status (ex: ['connected', 'connecting'])
+        if (Array.isArray(filters.status)) {
+            const placeholders = filters.status.map((_, i) => `$${paramCount + i}`).join(', ');
+            query += ` AND status IN (${placeholders})`;
+            params.push(...filters.status);
+            paramCount += filters.status.length;
+        } else {
+            query += ` AND status = $${paramCount}`;
+            params.push(filters.status);
+            paramCount++;
+        }
     }
 
     query += ` ORDER BY created_at DESC`;

@@ -372,7 +372,7 @@ async function startServer() {
 
         // Restaurar sessões ativas
         logger.info('🔄 Restaurando sessões ativas...');
-        const activeSessions = await Session.findAll({ status: 'connected' });
+        const activeSessions = await Session.findAll({ status: ['connected', 'connecting'] });
 
         logger.info(`Encontradas ${activeSessions.length} sessões para restaurar`);
 
