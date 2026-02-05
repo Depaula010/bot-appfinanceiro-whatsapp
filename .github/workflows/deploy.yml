@@ -24,7 +24,9 @@ jobs:
             
             # 2. Atualizar o código (git pull)
             # Como a chave pública está configurada no Repo, ele tem permissão de leitura
-            git pull origin main
+            git fetch origin
+            git checkout refatoracao
+            git pull origin refatoracao
             
             # 3. Garantir que a rede externa existe (evita erro no docker-compose)
             docker network create rede-global || true
