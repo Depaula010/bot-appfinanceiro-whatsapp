@@ -3,8 +3,12 @@
 // ========================================
 // Validação de API keys e autorização de sessões
 
+const crypto = require('crypto');
+const pino = require('pino');
 const ApiKey = require('../models/apiKey');
 const Session = require('../models/session');
+
+const logger = pino({ level: process.env.LOG_LEVEL || 'warn' });
 
 /**
  * Middleware para validar API key no header X-API-Key
@@ -36,7 +40,7 @@ async function validateApiKey(req, res, next) {
 
         next();
     } catch (error) {
-        console.error('[AUTH] Erro ao validar API key:', error);
+        logger.error({ err: error }, 'Erro ao validar API key');
         return res.status(500).json({
             status: 'error',
             message: 'Internal server error during authentication'
@@ -89,7 +93,7 @@ async function authorizeSession(req, res, next) {
 
         next();
     } catch (error) {
-        console.error('[AUTH] Erro ao autorizar sessão:', error);
+        logger.error({ err: error }, 'Erro ao autorizar sessão');
         return res.status(500).json({
             status: 'error',
             message: 'Internal server error during authorization'
@@ -106,7 +110,7 @@ function validateAdminKey(req, res, next) {
     const expectedAdminKey = process.env.ADMIN_API_KEY;
 
     if (!expectedAdminKey) {
-        console.error('[SECURITY] ADMIN_API_KEY não configurada no ambiente');
+        logger.error('ADMIN_API_KEY não configurada no ambiente');
         return res.status(500).json({
             status: 'error',
             message: 'Admin endpoints not configured'
@@ -120,8 +124,11 @@ function validateAdminKey(req, res, next) {
         });
     }
 
-    if (adminKey !== expectedAdminKey) {
-        console.warn('[SECURITY] Tentativa de acesso admin com chave inválida');
+    // Timing-safe comparison para prevenir timing attacks
+    const adminBuf = Buffer.from(adminKey);
+    const expectedBuf = Buffer.from(expectedAdminKey);
+    if (adminBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(adminBuf, expectedBuf)) {
+        logger.warn({ ip: req.ip }, 'Tentativa de acesso admin com chave inválida');
         return res.status(403).json({
             status: 'error',
             message: 'Invalid admin key'
@@ -161,7 +168,7 @@ function checkSessionLimit(maxSessions = null) {
 
             next();
         } catch (error) {
-            console.error('[AUTH] Erro ao verificar limite de sessões:', error);
+            logger.error({ err: error }, 'Erro ao verificar limite de sessões');
             return res.status(500).json({
                 status: 'error',
                 message: 'Internal server error'
@@ -178,15 +185,26 @@ function validateLegacyApiKey(req, res, next) {
     const apiKey = req.headers['x-api-key'];
     const legacyKey = process.env.API_SECRET_KEY;
 
-    if (!apiKey || apiKey !== legacyKey) {
+    if (!apiKey || !legacyKey) {
         return res.status(401).json({
             status: 'erro',
             mensagem: 'Não autorizado'
         });
     }
 
-    // Adicionar flag de legacy
+    // Timing-safe comparison para prevenir timing attacks
+    const apiBuf = Buffer.from(apiKey);
+    const legacyBuf = Buffer.from(legacyKey);
+    if (apiBuf.length !== legacyBuf.length || !crypto.timingSafeEqual(apiBuf, legacyBuf)) {
+        return res.status(401).json({
+            status: 'erro',
+            mensagem: 'Não autorizado'
+        });
+    }
+
+    // Adicionar flag de legacy + deprecation header
     req.isLegacy = true;
+    res.setHeader('X-Deprecation-Warning', 'Legacy authentication is deprecated. Migrate to API key authentication.');
 
     next();
 }

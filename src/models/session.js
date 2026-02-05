@@ -243,11 +243,12 @@ async function findActiveByApiKey(apiKeyId) {
  * @returns {Promise<Array>} Sessões idle
  */
 async function findIdleSessions(hours = 24) {
+    const safeHours = Math.max(1, Math.min(parseInt(hours, 10) || 24, 8760));
     const result = await pool.query(
         `SELECT * FROM sessions
          WHERE status = 'connected'
-         AND last_connected_at < NOW() - INTERVAL '${hours} hours'`,
-        []
+         AND last_connected_at < NOW() - INTERVAL '1 hour' * $1`,
+        [safeHours]
     );
 
     return result.rows;

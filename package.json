@@ -28,6 +28,7 @@
     "bcrypt": "^5.1.1",
     "express": "^5.1.0",
     "express-rate-limit": "^7.1.5",
+    "helmet": "^8.1.0",
     "pg": "^8.11.3",
     "pino": "^9.1.0",
     "qrcode": "^1.5.4",

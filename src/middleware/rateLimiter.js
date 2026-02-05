@@ -54,7 +54,7 @@ function createRateLimiter() {
 function createQRRateLimiter() {
     return rateLimit({
         windowMs: 60 * 1000, // 1 minuto
-        max: 120, // Permite polling a cada ~0.5s
+        max: 20, // Polling a cada ~3s (QR dura 60s, 20 tentativas é suficiente)
         keyGenerator: (req) => {
             const sessionId = req.params.session_id || 'unknown';
             return `qr_${req.apiKeyId || req.ip}_${sessionId}`;
@@ -130,10 +130,31 @@ function createGlobalRateLimiter() {
     });
 }
 
+/**
+ * Rate limiter para falhas de autenticação
+ * Bloqueia IP após múltiplas tentativas falhas
+ */
+function createAuthFailureRateLimiter() {
+    return rateLimit({
+        windowMs: 15 * 60 * 1000, // 15 minutos
+        max: 5, // 5 tentativas falhas por 15 min
+        keyGenerator: (req) => req.ip,
+        skipSuccessfulRequests: true, // Só conta falhas (status >= 400)
+        message: {
+            status: 'error',
+            message: 'Too many authentication failures. Try again later.',
+            retry_after: '15 minutes'
+        },
+        standardHeaders: true,
+        legacyHeaders: false
+    });
+}
+
 module.exports = {
     createRateLimiter,
     createQRRateLimiter,
     createAdminRateLimiter,
     createCreationRateLimiter,
-    createGlobalRateLimiter
+    createGlobalRateLimiter,
+    createAuthFailureRateLimiter
 };

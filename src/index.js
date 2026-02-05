@@ -4,6 +4,7 @@
 // Entry point da aplicação refatorada
 
 const express = require('express');
+const helmet = require('helmet');
 const pino = require('pino');
 const { testConnection, pool } = require('./config/database');
 const sessionManager = require('./services/sessionManager');
@@ -15,12 +16,18 @@ const app = express();
 const port = process.env.PORT || 3000;
 const logger = pino({ level: process.env.LOG_LEVEL || 'warn' });
 
+// Trust proxy (necessário atrás de Docker/nginx para req.ip correto)
+app.set('trust proxy', parseInt(process.env.TRUST_PROXY || '1', 10));
+
 // ========================================
 // MIDDLEWARES GLOBAIS
 // ========================================
 
-app.use(express.json({ limit: '10mb' })); // Permitir imagens base64
-app.use(express.urlencoded({ extended: true }));
+// Security headers
+app.use(helmet());
+
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: false, limit: '1mb' }));
 
 // Rate limiting global
 app.use(createGlobalRateLimiter());
@@ -39,10 +46,14 @@ if (process.env.LOG_LEVEL === 'debug') {
 
 // CORS (se necessário)
 if (process.env.ENABLE_CORS === 'true') {
+    const allowedOrigins = (process.env.ALLOWED_ORIGINS || '').split(',').filter(Boolean);
     app.use((req, res, next) => {
-        res.header('Access-Control-Allow-Origin', '*');
+        const origin = req.headers.origin;
+        if (allowedOrigins.length > 0 && allowedOrigins.includes(origin)) {
+            res.header('Access-Control-Allow-Origin', origin);
+        }
         res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, X-API-Key, X-Admin-Key');
-        res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+        res.header('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
 
         if (req.method === 'OPTIONS') {
             return res.sendStatus(200);
@@ -89,8 +100,7 @@ app.get('/health', async (req, res) => {
         });
     } catch (error) {
         res.status(503).json({
-            status: 'unhealthy',
-            error: error.message
+            status: 'unhealthy'
         });
     }
 });
@@ -173,8 +183,7 @@ app.post('/enviar-mensagem', validateLegacyApiKey, async (req, res) => {
 
         res.status(500).json({
             status: 'erro',
-            mensagem: 'Falha ao enviar mensagem',
-            detalhe: error.message
+            mensagem: 'Falha ao enviar mensagem'
         });
     }
 });
@@ -226,8 +235,7 @@ app.post('/enviar-imagem', validateLegacyApiKey, async (req, res) => {
         logger.error({ err: error }, 'Erro em endpoint legado /enviar-imagem');
         res.status(500).json({
             status: 'erro',
-            mensagem: 'Falha ao enviar imagem',
-            detalhe: error.message
+            mensagem: 'Falha ao enviar imagem'
         });
     }
 });
@@ -287,7 +295,7 @@ app.get('/ping', validateLegacyApiKey, async (req, res) => {
         });
     } catch (error) {
         logger.error({ err: error }, 'Erro em /ping');
-        res.status(500).json({ pong: false, error: error.message });
+        res.status(500).json({ pong: false });
     }
 });
 
@@ -318,8 +326,7 @@ app.post('/limpar-sessao', validateLegacyApiKey, async (req, res) => {
         logger.error({ err: error }, 'Erro ao limpar sessão');
         res.status(500).json({
             status: 'erro',
-            mensagem: 'Erro ao limpar sessão',
-            detalhe: error.message
+            mensagem: 'Erro ao limpar sessão'
         });
     }
 });
@@ -343,8 +350,7 @@ app.use((err, req, res, next) => {
 
     res.status(err.status || 500).json({
         status: 'error',
-        message: err.message || 'Internal server error',
-        ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
+        message: 'Internal server error'
     });
 });
 

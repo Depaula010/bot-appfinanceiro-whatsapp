@@ -114,15 +114,15 @@ async function runMigrations() {
         // 6. Migrar baileys_auth existente
         console.log('\n🔐 Migrando dados de autenticação Baileys...');
 
-        const baileys AuthResult = await client.query(
+        const baileysAuthResult = await client.query(
             `UPDATE baileys_auth
              SET session_uuid = $1
              WHERE session_id = 'baileys_session' AND session_uuid IS NULL`,
             [sessionId]
         );
 
-        if (baileys AuthResult.rowCount > 0) {
-            console.log(`✅ ${baileys AuthResult.rowCount} registros de autenticação migrados`);
+        if (baileysAuthResult.rowCount > 0) {
+            console.log(`✅ ${baileysAuthResult.rowCount} registros de autenticação migrados`);
         } else {
             console.log('ℹ️  Nenhum registro de autenticação encontrado (normal se é primeira instalação)');
         }
@@ -130,24 +130,36 @@ async function runMigrations() {
         // 7. Commit da transação
         await client.query('COMMIT');
 
+        // Salvar API key em arquivo seguro em vez de exibir em logs
+        const keyFilePath = path.join(__dirname, '..', '.api-key-generated.txt');
+        const keyFileContent = [
+            'WHATSAPP API KEY - GERADA PELA MIGRACAO',
+            '========================================',
+            'IMPORTANTE: Salve esta chave em local seguro e DELETE este arquivo!',
+            '',
+            `WHATSAPP_API_KEY=${apiKey}`,
+            `WHATSAPP_SESSION_ID=${sessionId}`,
+            '',
+            `Key Prefix: ${keyPrefix}`,
+            `Project Name: Sistema Legado`,
+            `Gerada em: ${new Date().toISOString()}`,
+        ].join('\n');
+
+        fs.writeFileSync(keyFilePath, keyFileContent, { mode: 0o600 });
+
         console.log('\n' + '='.repeat(80));
         console.log('✅ MIGRAÇÕES CONCLUÍDAS COM SUCESSO!');
         console.log('='.repeat(80));
-        console.log('\n⚠️  IMPORTANTE - SALVE AS INFORMAÇÕES ABAIXO:\n');
-        console.log('📋 API Key (copie e guarde em local seguro):');
-        console.log(`   ${apiKey}\n`);
-        console.log('🆔 Session ID:');
-        console.log(`   ${sessionId}\n`);
-        console.log('📂 Project Name:');
-        console.log(`   Sistema Legado\n`);
-        console.log('⚙️  Adicione ao seu .env:');
-        console.log(`   WHATSAPP_API_KEY=${apiKey}`);
-        console.log(`   WHATSAPP_SESSION_ID=${sessionId}\n`);
+        console.log(`\n🔑 API Key salva em: ${keyFilePath}`);
+        console.log(`   Key Prefix: ${keyPrefix}...`);
+        console.log(`\n🆔 Session ID: ${sessionId}`);
+        console.log('📂 Project Name: Sistema Legado\n');
         console.log('📝 Próximos passos:');
-        console.log('   1. Salve a API key em local seguro');
-        console.log('   2. Execute: npm install (para instalar novas dependências)');
-        console.log('   3. Reinicie a aplicação');
-        console.log('   4. A sessão legada será mantida automaticamente\n');
+        console.log('   1. Copie a API key do arquivo .api-key-generated.txt');
+        console.log('   2. Adicione ao seu .env');
+        console.log('   3. DELETE o arquivo .api-key-generated.txt');
+        console.log('   4. Execute: npm install (para instalar novas dependências)');
+        console.log('   5. Reinicie a aplicação\n');
         console.log('='.repeat(80) + '\n');
 
     } catch (error) {

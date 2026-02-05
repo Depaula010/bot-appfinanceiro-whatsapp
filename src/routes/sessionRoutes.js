@@ -4,12 +4,16 @@
 // Endpoints para gerenciamento de sessões WhatsApp
 
 const express = require('express');
+const pino = require('pino');
 const router = express.Router();
 const Session = require('../models/session');
 const sessionManager = require('../services/sessionManager');
 const whatsappService = require('../services/whatsappService');
 const { validateApiKey, authorizeSession, checkSessionLimit } = require('../middleware/authMiddleware');
 const { createQRRateLimiter, createCreationRateLimiter } = require('../middleware/rateLimiter');
+const { validateWebhookUrl } = require('../utils/validation');
+
+const logger = pino({ level: process.env.LOG_LEVEL || 'warn' });
 
 // Aplicar autenticação em todas as rotas
 router.use(validateApiKey);
@@ -31,6 +35,25 @@ router.post('/',
                     status: 'error',
                     message: 'Missing required fields: session_name, webhook_url, webhook_signature_key'
                 });
+            }
+
+            // Validar webhook URL (prevenir SSRF)
+            if (!validateWebhookUrl(webhook_url)) {
+                return res.status(400).json({
+                    status: 'error',
+                    message: 'Invalid webhook URL. Must be a valid HTTP/HTTPS URL pointing to a public address.'
+                });
+            }
+
+            // Validar metadata (limitar tamanho)
+            if (metadata !== undefined) {
+                const metadataStr = JSON.stringify(metadata);
+                if (metadataStr.length > 4096) {
+                    return res.status(400).json({
+                        status: 'error',
+                        message: 'Metadata too large. Maximum 4KB allowed.'
+                    });
+                }
             }
 
             // Verificar se nome já existe
@@ -62,11 +85,10 @@ router.post('/',
                 }
             });
         } catch (error) {
-            console.error('[SESSIONS] Erro ao criar sessão:', error);
+            logger.error({ err: error }, 'Erro ao criar sessão');
             res.status(500).json({
                 status: 'error',
-                message: 'Failed to create session',
-                detail: error.message
+                message: 'Failed to create session'
             });
         }
     }
@@ -93,7 +115,7 @@ router.get('/', async (req, res) => {
             count: sessions.length
         });
     } catch (error) {
-        console.error('[SESSIONS] Erro ao listar sessões:', error);
+        logger.error({ err: error }, '[SESSIONS] Erro ao listar sessões:', error);
         res.status(500).json({
             status: 'error',
             message: 'Failed to list sessions'
@@ -126,7 +148,7 @@ router.get('/:session_id', authorizeSession, async (req, res) => {
             }
         });
     } catch (error) {
-        console.error('[SESSIONS] Erro ao obter sessão:', error);
+        logger.error({ err: error }, '[SESSIONS] Erro ao obter sessão:', error);
         res.status(500).json({
             status: 'error',
             message: 'Failed to get session details'
@@ -169,11 +191,11 @@ router.post('/:session_id/connect',
                 }
             });
         } catch (error) {
-            console.error('[SESSIONS] Erro ao conectar sessão:', error);
+            logger.error({ err: error }, '[SESSIONS] Erro ao conectar sessão:', error);
             res.status(500).json({
                 status: 'error',
                 message: 'Failed to initiate connection',
-                detail: error.message
+
             });
         }
     }
@@ -245,11 +267,11 @@ router.get('/:session_id/qr',
                 }
             });
         } catch (error) {
-            console.error('[SESSIONS] Erro ao obter QR:', error);
+            logger.error({ err: error }, '[SESSIONS] Erro ao obter QR:', error);
             res.status(500).json({
                 status: 'error',
                 message: 'Failed to get QR code',
-                detail: error.message
+
             });
         }
     }
@@ -276,11 +298,11 @@ router.post('/:session_id/disconnect',
                 }
             });
         } catch (error) {
-            console.error('[SESSIONS] Erro ao desconectar sessão:', error);
+            logger.error({ err: error }, '[SESSIONS] Erro ao desconectar sessão:', error);
             res.status(500).json({
                 status: 'error',
                 message: 'Failed to disconnect session',
-                detail: error.message
+
             });
         }
     }
@@ -310,11 +332,11 @@ router.delete('/:session_id',
                 }
             });
         } catch (error) {
-            console.error('[SESSIONS] Erro ao deletar sessão:', error);
+            logger.error({ err: error }, '[SESSIONS] Erro ao deletar sessão:', error);
             res.status(500).json({
                 status: 'error',
                 message: 'Failed to delete session',
-                detail: error.message
+
             });
         }
     }
@@ -330,8 +352,8 @@ router.get('/:session_id/logs',
         try {
             const { pool } = require('../config/database');
             const sessionId = req.params.session_id;
-            const limit = parseInt(req.query.limit || '50', 10);
-            const offset = parseInt(req.query.offset || '0', 10);
+            const limit = Math.min(parseInt(req.query.limit || '50', 10) || 50, 500);
+            const offset = Math.max(parseInt(req.query.offset || '0', 10) || 0, 0);
 
             const result = await pool.query(
                 `SELECT id, event_type, details, created_at
@@ -348,7 +370,7 @@ router.get('/:session_id/logs',
                 count: result.rows.length
             });
         } catch (error) {
-            console.error('[SESSIONS] Erro ao obter logs:', error);
+            logger.error({ err: error }, '[SESSIONS] Erro ao obter logs:', error);
             res.status(500).json({
                 status: 'error',
                 message: 'Failed to get session logs'

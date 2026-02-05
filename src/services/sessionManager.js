@@ -184,7 +184,7 @@ class SessionManager {
              // Lógica de webhook aqui (simplificada para focar na conexão)
              // ...
         } catch (e) {
-            console.error('Erro msg:', e);
+            logger.error({ err: e, sessionId }, 'Erro ao processar mensagem recebida');
         }
     }
 

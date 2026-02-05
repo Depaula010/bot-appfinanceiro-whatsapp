@@ -4,11 +4,14 @@
 // Endpoints para envio de mensagens e imagens
 
 const express = require('express');
+const pino = require('pino');
 const router = express.Router();
 const sessionManager = require('../services/sessionManager');
 const whatsappService = require('../services/whatsappService');
 const { validateApiKey, authorizeSession } = require('../middleware/authMiddleware');
 const { createRateLimiter } = require('../middleware/rateLimiter');
+
+const logger = pino({ level: process.env.LOG_LEVEL || 'warn' });
 
 // Aplicar autenticação e rate limiting
 router.use(validateApiKey);
@@ -25,11 +28,25 @@ router.post('/:session_id/send-message',
             const sessionId = req.params.session_id;
             const { numero, mensagem } = req.body;
 
-            // Validações
+            // Validações de tipo e presença
             if (!numero || !mensagem) {
                 return res.status(400).json({
                     status: 'error',
                     message: 'Missing required fields: numero, mensagem'
+                });
+            }
+
+            if (typeof numero !== 'string' || typeof mensagem !== 'string') {
+                return res.status(400).json({
+                    status: 'error',
+                    message: 'Fields numero and mensagem must be strings'
+                });
+            }
+
+            if (mensagem.length > 4096) {
+                return res.status(400).json({
+                    status: 'error',
+                    message: 'Message exceeds maximum length of 4096 characters'
                 });
             }
 
@@ -71,7 +88,7 @@ router.post('/:session_id/send-message',
                 }
             });
         } catch (error) {
-            console.error('[MESSAGES] Erro ao enviar mensagem:', error);
+            logger.error({ err: error }, 'Erro ao enviar mensagem');
 
             if (error.message === 'Number not found on WhatsApp') {
                 return res.status(404).json({
@@ -82,8 +99,7 @@ router.post('/:session_id/send-message',
 
             res.status(500).json({
                 status: 'erro',
-                mensagem: 'Falha ao enviar mensagem',
-                detalhe: error.message
+                mensagem: 'Falha ao enviar mensagem'
             });
         }
     }
@@ -105,6 +121,13 @@ router.post('/:session_id/send-image',
                 return res.status(400).json({
                     status: 'error',
                     message: 'Missing required fields: numero, imagem (base64)'
+                });
+            }
+
+            if (typeof numero !== 'string' || typeof imagem !== 'string') {
+                return res.status(400).json({
+                    status: 'error',
+                    message: 'Fields numero and imagem must be strings'
                 });
             }
 
@@ -165,7 +188,7 @@ router.post('/:session_id/send-image',
                 }
             });
         } catch (error) {
-            console.error('[MESSAGES] Erro ao enviar imagem:', error);
+            logger.error({ err: error }, 'Erro ao enviar imagem');
 
             if (error.message === 'Number not found on WhatsApp') {
                 return res.status(404).json({
@@ -176,8 +199,7 @@ router.post('/:session_id/send-image',
 
             res.status(500).json({
                 status: 'erro',
-                mensagem: 'Falha ao enviar imagem',
-                detalhe: error.message
+                mensagem: 'Falha ao enviar imagem'
             });
         }
     }
@@ -199,6 +221,13 @@ router.post('/:session_id/send-bulk',
                 return res.status(400).json({
                     status: 'error',
                     message: 'Missing required fields: numeros (array), mensagem'
+                });
+            }
+
+            if (typeof mensagem !== 'string' || mensagem.length > 4096) {
+                return res.status(400).json({
+                    status: 'error',
+                    message: 'Invalid message format or exceeds 4096 characters'
                 });
             }
 
@@ -247,8 +276,7 @@ router.post('/:session_id/send-bulk',
                 } catch (error) {
                     results.push({
                         numero,
-                        status: 'error',
-                        error: error.message
+                        status: 'error'
                     });
                 }
             }
@@ -266,11 +294,10 @@ router.post('/:session_id/send-bulk',
                 }
             });
         } catch (error) {
-            console.error('[MESSAGES] Erro em bulk send:', error);
+            logger.error({ err: error }, 'Erro em bulk send');
             res.status(500).json({
                 status: 'error',
-                message: 'Failed to send bulk messages',
-                detail: error.message
+                message: 'Failed to send bulk messages'
             });
         }
     }

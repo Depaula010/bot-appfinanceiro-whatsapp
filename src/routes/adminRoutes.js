@@ -4,14 +4,19 @@
 // Endpoints administrativos (criação de API keys, estatísticas, etc)
 
 const express = require('express');
+const pino = require('pino');
 const router = express.Router();
 const ApiKey = require('../models/apiKey');
 const Session = require('../models/session');
 const sessionManager = require('../services/sessionManager');
 const { generateApiKey } = require('../utils/crypto');
 const { validateAdminKey } = require('../middleware/authMiddleware');
-const { createAdminRateLimiter } = require('../middleware/rateLimiter');
+const { createAdminRateLimiter, createAuthFailureRateLimiter } = require('../middleware/rateLimiter');
 
+const logger = pino({ level: process.env.LOG_LEVEL || 'warn' });
+
+// Rate limit para falhas de auth (antes da validação)
+router.use(createAuthFailureRateLimiter());
 // Aplicar autenticação admin em todas as rotas
 router.use(validateAdminKey);
 router.use(createAdminRateLimiter());
@@ -50,6 +55,15 @@ router.post('/api-keys', async (req, res) => {
             expires_at: expires_at ? new Date(expires_at) : null
         });
 
+        // Audit log
+        logger.info({
+            action: 'api_key_created',
+            api_key_id: keyRecord.id,
+            key_prefix: keyRecord.key_prefix,
+            project_name,
+            ip: req.ip
+        }, 'API key criada');
+
         res.status(201).json({
             status: 'success',
             message: 'API key created successfully',
@@ -67,11 +81,10 @@ router.post('/api-keys', async (req, res) => {
             warning: 'Save this API key securely. It cannot be retrieved again.'
         });
     } catch (error) {
-        console.error('[ADMIN] Erro ao criar API key:', error);
+        logger.error({ err: error }, 'Erro ao criar API key');
         res.status(500).json({
             status: 'error',
-            message: 'Failed to create API key',
-            detail: error.message
+            message: 'Failed to create API key'
         });
     }
 });
@@ -88,8 +101,8 @@ router.get('/api-keys', async (req, res) => {
         if (is_active !== undefined) {
             filters.is_active = is_active === 'true';
         }
-        if (limit) filters.limit = parseInt(limit, 10);
-        if (offset) filters.offset = parseInt(offset, 10);
+        if (limit) filters.limit = Math.min(parseInt(limit, 10) || 50, 500);
+        if (offset) filters.offset = Math.max(parseInt(offset, 10) || 0, 0);
 
         const keys = await ApiKey.findAll(filters);
 
@@ -99,7 +112,7 @@ router.get('/api-keys', async (req, res) => {
             count: keys.length
         });
     } catch (error) {
-        console.error('[ADMIN] Erro ao listar API keys:', error);
+        logger.error({ err: error }, 'Erro ao listar API keys');
         res.status(500).json({
             status: 'error',
             message: 'Failed to list API keys'
@@ -139,7 +152,7 @@ router.get('/api-keys/:key_id', async (req, res) => {
             }
         });
     } catch (error) {
-        console.error('[ADMIN] Erro ao obter API key:', error);
+        logger.error({ err: error }, 'Erro ao obter API key');
         res.status(500).json({
             status: 'error',
             message: 'Failed to get API key details'
@@ -181,11 +194,10 @@ router.patch('/api-keys/:key_id', async (req, res) => {
             data: updated
         });
     } catch (error) {
-        console.error('[ADMIN] Erro ao atualizar API key:', error);
+        logger.error({ err: error }, 'Erro ao atualizar API key');
         res.status(500).json({
             status: 'error',
-            message: 'Failed to update API key',
-            detail: error.message
+            message: 'Failed to update API key'
         });
     }
 });
@@ -200,26 +212,25 @@ router.delete('/api-keys/:key_id', async (req, res) => {
         const permanent = req.query.permanent === 'true';
 
         if (permanent) {
-            // Deletar permanentemente (também deleta todas as sessões)
             await ApiKey.remove(keyId);
+            logger.info({ action: 'api_key_deleted', api_key_id: keyId, ip: req.ip }, 'API key deletada permanentemente');
             res.json({
                 status: 'success',
                 message: 'API key permanently deleted'
             });
         } else {
-            // Apenas desativar (soft delete)
             await ApiKey.deactivate(keyId);
+            logger.info({ action: 'api_key_deactivated', api_key_id: keyId, ip: req.ip }, 'API key desativada');
             res.json({
                 status: 'success',
                 message: 'API key deactivated'
             });
         }
     } catch (error) {
-        console.error('[ADMIN] Erro ao revogar API key:', error);
+        logger.error({ err: error }, 'Erro ao revogar API key');
         res.status(500).json({
             status: 'error',
-            message: 'Failed to revoke API key',
-            detail: error.message
+            message: 'Failed to revoke API key'
         });
     }
 });
@@ -233,11 +244,9 @@ router.get('/stats', async (req, res) => {
         const { pool } = require('../config/database');
         const { getPoolStats } = require('../config/database');
 
-        // Estatísticas de API keys
         const totalKeys = await ApiKey.count(false);
         const activeKeys = await ApiKey.count(true);
 
-        // Estatísticas de sessões
         const sessionsResult = await pool.query(`
             SELECT
                 COUNT(*) as total,
@@ -249,14 +258,9 @@ router.get('/stats', async (req, res) => {
         `);
 
         const sessionStats = sessionsResult.rows[0];
-
-        // Estatísticas do session manager
         const managerStats = sessionManager.getStats();
-
-        // Estatísticas do pool PostgreSQL
         const poolStats = getPoolStats();
 
-        // Logs recentes
         const recentLogsResult = await pool.query(`
             SELECT event_type, COUNT(*) as count
             FROM session_logs
@@ -287,11 +291,10 @@ router.get('/stats', async (req, res) => {
             }
         });
     } catch (error) {
-        console.error('[ADMIN] Erro ao obter estatísticas:', error);
+        logger.error({ err: error }, 'Erro ao obter estatísticas');
         res.status(500).json({
             status: 'error',
-            message: 'Failed to get statistics',
-            detail: error.message
+            message: 'Failed to get statistics'
         });
     }
 });
@@ -306,8 +309,8 @@ router.get('/sessions', async (req, res) => {
 
         const filters = {};
         if (status) filters.status = status;
-        if (limit) filters.limit = parseInt(limit, 10);
-        if (offset) filters.offset = parseInt(offset, 10);
+        if (limit) filters.limit = Math.min(parseInt(limit, 10) || 50, 500);
+        if (offset) filters.offset = Math.max(parseInt(offset, 10) || 0, 0);
 
         const sessions = await Session.findAll(filters);
 
@@ -317,7 +320,7 @@ router.get('/sessions', async (req, res) => {
             count: sessions.length
         });
     } catch (error) {
-        console.error('[ADMIN] Erro ao listar sessões:', error);
+        logger.error({ err: error }, 'Erro ao listar sessões');
         res.status(500).json({
             status: 'error',
             message: 'Failed to list sessions'
@@ -331,16 +334,16 @@ router.get('/sessions', async (req, res) => {
  */
 router.post('/cleanup-idle', async (req, res) => {
     try {
-        const hours = parseInt(req.query.hours || '24', 10);
+        const hours = Math.max(1, Math.min(parseInt(req.query.hours || '24', 10) || 24, 8760));
 
         const idleSessions = await Session.findIdleSessions(hours);
 
         for (const session of idleSessions) {
             try {
                 await sessionManager.disconnectSession(session.id);
-                console.log(`[ADMIN] Sessão idle desconectada: ${session.id}`);
+                logger.info({ sessionId: session.id }, 'Sessão idle desconectada');
             } catch (error) {
-                console.error(`[ADMIN] Erro ao desconectar ${session.id}:`, error);
+                logger.error({ err: error, sessionId: session.id }, 'Erro ao desconectar sessão idle');
             }
         }
 
@@ -357,11 +360,10 @@ router.post('/cleanup-idle', async (req, res) => {
             }
         });
     } catch (error) {
-        console.error('[ADMIN] Erro em cleanup:', error);
+        logger.error({ err: error }, 'Erro em cleanup');
         res.status(500).json({
             status: 'error',
-            message: 'Failed to cleanup idle sessions',
-            detail: error.message
+            message: 'Failed to cleanup idle sessions'
         });
     }
 });

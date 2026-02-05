@@ -11,7 +11,9 @@ const logger = pino({ level: process.env.LOG_LEVEL || 'warn' });
 // Configurações do pool
 const poolConfig = {
     connectionString: process.env.DATABASE_URL,
-    ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
+    ssl: process.env.DB_SSL === 'true' ? {
+        rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED !== 'false'
+    } : false,
     max: parseInt(process.env.DB_POOL_MAX || '50', 10), // Aumentado para multi-sessão
     min: parseInt(process.env.DB_POOL_MIN || '10', 10),
     idleTimeoutMillis: 30000,
