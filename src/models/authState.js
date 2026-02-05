@@ -1,13 +1,58 @@
 // ========================================
-// Auth State para Baileys (Multi-Sessão) - CORRIGIDO
+// Auth State para Baileys (Multi-Sessão) - CORRIGIDO v2
 // ========================================
 // Gerencia estado de autenticação do Baileys no PostgreSQL por session_uuid
 
-const { initAuthCreds, makeCacheableSignalKeyStore, BufferJSON } = require('@whiskeysockets/baileys');
+const { initAuthCreds, makeCacheableSignalKeyStore } = require('@whiskeysockets/baileys');
 const { pool } = require('../config/database');
 const pino = require('pino');
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'warn' });
+
+// ====================================================================
+// SERIALIZAÇÃO DE BUFFERS - Implementação própria
+// Como o Baileys usa ESM e nosso projeto usa CommonJS, implementamos
+// nosso próprio replacer/reviver para lidar com Buffers
+// ====================================================================
+
+/**
+ * Converte Buffers para Base64 ao salvar em JSON
+ */
+const bufferReplacer = (key, value) => {
+    if (value && typeof value === 'object') {
+        if (Buffer.isBuffer(value)) {
+            return {
+                type: 'Buffer',
+                data: value.toString('base64')
+            };
+        }
+        // Suporta Uint8Array também
+        if (value.constructor && value.constructor.name === 'Uint8Array') {
+            return {
+                type: 'Buffer',
+                data: Buffer.from(value).toString('base64')
+            };
+        }
+    }
+    return value;
+};
+
+/**
+ * Converte Base64 de volta para Buffers ao ler JSON
+ */
+const bufferReviver = (key, value) => {
+    if (value && typeof value === 'object' && value.type === 'Buffer') {
+        if (Array.isArray(value.data)) {
+            // Formato antigo: array de bytes
+            return Buffer.from(value.data);
+        }
+        if (typeof value.data === 'string') {
+            // Formato novo: base64 string
+            return Buffer.from(value.data, 'base64');
+        }
+    }
+    return value;
+};
 
 /**
  * Cria auth state para uma sessão específica
@@ -77,8 +122,8 @@ async function createAuthState(sessionUuid) {
                 if (!data_value) continue;
 
                 try {
-                    // Usar BufferJSON.parse do Baileys para deserialização correta
-                    const parsedValue = JSON.parse(data_value, BufferJSON.reviver);
+                    // Usar nosso bufferReviver para deserialização correta
+                    const parsedValue = JSON.parse(data_value, bufferReviver);
 
                     if (data_key === 'creds') {
                         // Mesclar com creds existentes (mantém campos que não foram salvos)
@@ -111,13 +156,26 @@ async function createAuthState(sessionUuid) {
 
     /**
      * Salva as credenciais no banco de dados
-     * CRÍTICO: Usa BufferJSON.stringify para serialização correta de Buffers
+     * CRÍTICO: Usa bufferReplacer para serialização correta de Buffers
      */
     const saveCreds = async () => {
         try {
-            const serializedCreds = JSON.stringify(authState.creds, BufferJSON.replacer);
+            // Validar se as credenciais não estão vazias
+            if (!authState.creds || !authState.creds.noiseKey || !authState.creds.signedIdentityKey) {
+                logger.warn({ sessionUuid }, 'Tentativa de salvar credenciais incompletas - ignorando');
+                return;
+            }
+
+            const serializedCreds = JSON.stringify(authState.creds, bufferReplacer);
+
+            // Validar se a serialização funcionou
+            if (serializedCreds.length < 100) { // Credenciais válidas sempre são maiores
+                logger.error({ sessionUuid, size: serializedCreds.length }, 'Credenciais serializadas muito pequenas - possível corrupção');
+                return;
+            }
+
             await upsertAuthData('creds', serializedCreds);
-            logger.debug({ sessionUuid }, 'Credenciais salvas com sucesso');
+            logger.debug({ sessionUuid, size: serializedCreds.length }, 'Credenciais salvas com sucesso');
         } catch (error) {
             logger.error({ err: error, sessionUuid }, 'ERRO CRÍTICO ao salvar credenciais');
             // Não lançar erro para não interromper o fluxo do Baileys
@@ -140,8 +198,8 @@ async function createAuthState(sessionUuid) {
                     [sessionUuid, dataKey]
                 );
             } else {
-                // Inserir/atualizar chave com BufferJSON
-                await upsertAuthData(dataKey, JSON.stringify(value, BufferJSON.replacer));
+                // Inserir/atualizar chave com bufferReplacer
+                await upsertAuthData(dataKey, JSON.stringify(value, bufferReplacer));
             }
         } catch (error) {
             logger.error({ err: error, keyPath }, 'Erro ao salvar key');

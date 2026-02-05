@@ -122,9 +122,12 @@ class SessionManager {
     async handleConnectionUpdate(sessionId, update, config) {
         const { connection, lastDisconnect, qr } = update;
 
+        console.log(`[${config.session_name}] Connection update:`, { connection, hasQr: !!qr, statusCode: lastDisconnect?.error?.output?.statusCode });
+
         try {
             // === 1. LÓGICA DE QR CODE ===
             if (qr) {
+                console.log(`[${config.session_name}] ✨ QR Code gerado!`);
                 logger.info({ sessionId }, 'QR Code gerado');
                 const expiresAt = new Date(Date.now() + 60000);
 
@@ -146,6 +149,7 @@ class SessionManager {
                 const sock = this.activeSessions.get(sessionId);
                 if (sock && sock.user) {
                     const phoneNumber = sock.user.id.split(':')[0];
+                    console.log(`[${config.session_name}] ✅ Sessão conectada! Telefone: ${phoneNumber}`);
                     logger.info({ sessionId, phoneNumber }, 'Sessão conectada com sucesso');
 
                     await Session.update(sessionId, {
