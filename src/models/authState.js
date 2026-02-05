@@ -5,6 +5,7 @@
 
 const { initAuthCreds, makeCacheableSignalKeyStore } = require('@whiskeysockets/baileys');
 const { pool } = require('../config/database');
+const pino = require('pino');
 
 /**
  * Converte Buffers para Base64 ao salvar em JSON

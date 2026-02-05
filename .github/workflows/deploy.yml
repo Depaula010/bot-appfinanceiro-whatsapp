@@ -20,7 +20,7 @@ jobs:
           port: 22
           script: |
             # 1. Entrar na pasta do projeto
-            cd /root/bot-whatsapp-financial
+            cd /root/bot-whatsapp
             
             # 2. Atualizar o código (git pull)
             # Como a chave pública está configurada no Repo, ele tem permissão de leitura
