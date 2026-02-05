@@ -31,12 +31,22 @@ jobs:
             # 3. Garantir que a rede externa existe (evita erro no docker-compose)
             docker network create rede-global || true
             
-            # 4. Recriar os containers com a nova versão
-            # --build: força recriar a imagem se houve mudança no código
-            docker compose -f docker.compose.yml up -d --build --remove-orphans
+            # 4. Parar o container atual para garantir limpeza
+            docker compose -f docker.compose.yml down || true
             
-            # 5. Limpar imagens antigas para não lotar o disco da Contabo
+            # 5. Recriar os containers com a nova versão (FORÇANDO rebuild completo)
+            # --no-cache: ignora cache de build (garante código novo)
+            # --force-recreate: recria o container mesmo se não detectar mudança
+            docker compose -f docker.compose.yml build --no-cache
+            docker compose -f docker.compose.yml up -d --force-recreate --remove-orphans
+            
+            # 6. Limpar imagens antigas para não lotar o disco da Contabo
             docker image prune -f
+            
+            # 7. Verificar se o container subiu corretamente
+            echo "🔍 Verificando status do container..."
+            sleep 5
+            docker compose -f docker.compose.yml ps
 
       # --- OPCIONAL: Notificação no WhatsApp ---
       # Para funcionar, crie mais dois Secrets: 
