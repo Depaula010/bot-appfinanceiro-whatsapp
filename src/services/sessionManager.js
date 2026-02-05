@@ -77,7 +77,7 @@ class SessionManager {
             // Adiciona na memória
             this.activeSessions.set(sessionId, sock);
             await Session.updateStatus(sessionId, 'connecting');
-            
+
             logger.info({ sessionId }, 'Sessão WhatsApp criada com sucesso');
 
             return sock;
@@ -85,7 +85,7 @@ class SessionManager {
             logger.error({ err: error, sessionId }, 'Erro ao criar sessão');
             await Session.updateStatus(sessionId, 'failed');
             // Garante limpeza em caso de erro na criação
-            this.activeSessions.delete(sessionId); 
+            this.activeSessions.delete(sessionId);
             throw error;
         }
     }
@@ -108,7 +108,7 @@ class SessionManager {
                 console.log('Sessão: ' + config.session_name);
                 qrcode.generate(qr, { small: true });
                 console.log('========================================\n');
-                
+
                 await this.logEvent(sessionId, 'qr_generated', { expires_at: expiresAt.toISOString() });
             }
 
@@ -129,7 +129,7 @@ class SessionManager {
 
                     this.qrCodeCache.delete(sessionId);
                     this.reconnectAttempts.delete(sessionId);
-                    
+
                     console.log('\n✅ *** BOT CONECTADO COM SUCESSO! ***\n');
                 }
             }
@@ -139,6 +139,38 @@ class SessionManager {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
                 const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
 
+                // === TRATAMENTO ESPECIAL PARA ERRO 515 ===
+                // Erro 515 indica auth corrompido - precisa limpar antes de reconectar
+                if (statusCode === 515) {
+                    logger.warn({ sessionId }, 'Erro 515 detectado: Auth state possivelmente corrompido. Limpando credenciais...');
+
+                    try {
+                        await removeAuthState(sessionId);
+                        await Session.updateStatus(sessionId, 'disconnected');
+                        this.activeSessions.delete(sessionId);
+                        this.qrCodeCache.delete(sessionId);
+                        this.reconnectAttempts.delete(sessionId);
+
+                        console.log('\n========================================');
+                        console.log('⚠️  ERRO 515: Auth corrompido detectado!');
+                        console.log('🔄 Credenciais limpas. Reiniciando sessão...');
+                        console.log('📱 Um novo QR Code será gerado.');
+                        console.log('========================================\n');
+
+                        // Delay mais longo para garantir limpeza completa
+                        setTimeout(() => {
+                            this.createSession(sessionId).catch(err => {
+                                logger.error({ err, sessionId }, 'Erro ao recriar sessão após 515');
+                            });
+                        }, 3000);
+                    } catch (cleanupError) {
+                        logger.error({ err: cleanupError, sessionId }, 'Erro ao limpar auth após 515');
+                        await Session.updateStatus(sessionId, 'failed');
+                    }
+                    return;
+                }
+                // ============================================
+
                 // Se caiu mas pode voltar (Ex: Timeout de QR Code ou Queda de Net)
                 if (shouldReconnect) {
                     const attempts = (this.reconnectAttempts.get(sessionId) || 0) + 1;
@@ -147,10 +179,10 @@ class SessionManager {
 
                     if (attempts <= 10) { // Aumentei um pouco as tentativas
                         logger.info({ sessionId, attempts }, `Conexão caiu (${statusCode}). Tentando reconectar em ${delay}ms...`);
-                        
+
                         // === CORREÇÃO CRÍTICA AQUI ===
                         // Removemos a sessão antiga da memória para permitir que o createSession crie uma nova
-                        this.activeSessions.delete(sessionId); 
+                        this.activeSessions.delete(sessionId);
                         // ==============================
 
                         setTimeout(() => {
@@ -181,8 +213,8 @@ class SessionManager {
         if (!msg.message || msg.key.fromMe || isBroadcast(msg.key.remoteJid)) return;
 
         try {
-             // Lógica de webhook aqui (simplificada para focar na conexão)
-             // ...
+            // Lógica de webhook aqui (simplificada para focar na conexão)
+            // ...
         } catch (e) {
             logger.error({ err: e, sessionId }, 'Erro ao processar mensagem recebida');
         }
@@ -194,24 +226,24 @@ class SessionManager {
         const chatId = formatarChatId(numero);
         return await sock.sendMessage(chatId, { text: mensagem });
     }
-    
+
     getSession(sessionId) { return this.activeSessions.get(sessionId); }
     getQRCode(sessionId) { return this.qrCodeCache.get(sessionId); }
     getStats() { return { active_sessions: this.activeSessions.size }; }
-    
+
     async disconnectSession(sessionId) {
         const sock = this.activeSessions.get(sessionId);
-        if(sock) { 
+        if (sock) {
             // Fecha o socket
             sock.end(undefined);
-            this.activeSessions.delete(sessionId); 
+            this.activeSessions.delete(sessionId);
         }
         await Session.updateStatus(sessionId, 'disconnected');
     }
-    
+
     async logEvent(sessionId, eventType, details = {}) {
         // Implementação simplificada do log
-         try {
+        try {
             await pool.query(
                 `INSERT INTO session_logs (session_id, event_type, details) VALUES ($1, $2, $3)`,
                 [sessionId, eventType, JSON.stringify(details)]
