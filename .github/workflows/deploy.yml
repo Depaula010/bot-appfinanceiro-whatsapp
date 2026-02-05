@@ -33,7 +33,7 @@ jobs:
             
             # 4. Recriar os containers com a nova versão
             # --build: força recriar a imagem se houve mudança no código
-            docker compose -f docker.composer.yml up -d --build --remove-orphans
+            docker compose -f docker.compose.yml up -d --build --remove-orphans
             
             # 5. Limpar imagens antigas para não lotar o disco da Contabo
             docker image prune -f
