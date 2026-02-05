@@ -162,13 +162,18 @@ function useDatabaseAuthState(sessionId = 'baileys_session') {
         }
 
         try {
-            await pool.query(`
-            INSERT INTO baileys_auth (session_id, data_key, data_value)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (session_id, data_key)
-            DO UPDATE SET data_value = $3
-        `, [sessionId, key, dataValue]);
+            // UPDATE primeiro, INSERT se não existir (evita problemas com ON CONFLICT)
+            const updateResult = await pool.query(
+                `UPDATE baileys_auth SET data_value = $3 WHERE session_id = $1 AND data_key = $2`,
+                [sessionId, key, dataValue]
+            );
 
+            if (updateResult.rowCount === 0) {
+                await pool.query(
+                    `INSERT INTO baileys_auth (session_id, data_key, data_value) VALUES ($1, $2, $3)`,
+                    [sessionId, key, dataValue]
+                );
+            }
         } catch (error) {
             console.error(`[AUTH] Erro ao salvar ${key}:`, error.message);
         }
