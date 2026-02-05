@@ -46,8 +46,19 @@ class SessionManager {
         logger.info({ sessionId, sessionName: sessionConfig.session_name }, 'Criando nova sessão WhatsApp');
 
         try {
-            const { state, saveCreds, loadCreds } = await createAuthState(sessionId);
-            await loadCreds();
+            const { state, saveCreds, loadCreds, clearCreds } = await createAuthState(sessionId);
+
+            // Tentar carregar credenciais existentes
+            try {
+                await loadCreds();
+                console.log(`[${sessionConfig.session_name}] Credenciais carregadas do banco`);
+            } catch (loadError) {
+                // Se falhar ao carregar (credenciais corrompidas do formato antigo), limpar tudo
+                console.error(`[${sessionConfig.session_name}] ⚠️  Erro ao carregar credenciais antigas:`, loadError.message);
+                console.log(`[${sessionConfig.session_name}] 🔄 Limpando credenciais corrompidas...`);
+                await clearCreds();
+                console.log(`[${sessionConfig.session_name}] ✨ Começando com credenciais novas`);
+            }
 
             const { version } = await fetchLatestBaileysVersion();
             logger.info({ sessionId, version: version.join('.') }, 'Versão do Baileys obtida');

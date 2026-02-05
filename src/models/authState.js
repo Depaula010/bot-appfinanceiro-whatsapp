@@ -116,6 +116,13 @@ async function createAuthState(sessionUuid) {
                 [sessionUuid]
             );
 
+            if (result.rows.length === 0) {
+                logger.info({ sessionUuid }, 'Nenhuma credencial encontrada - usando credenciais novas');
+                return; // Sem credenciais = usar initAuthCreds (já inicializado)
+            }
+
+            let credsParsed = false;
+
             for (const row of result.rows) {
                 const { data_key, data_value } = row;
 
@@ -128,6 +135,7 @@ async function createAuthState(sessionUuid) {
                     if (data_key === 'creds') {
                         // Mesclar com creds existentes (mantém campos que não foram salvos)
                         Object.assign(authState.creds, parsedValue);
+                        credsParsed = true;
                     } else if (data_key.startsWith('key-')) {
                         // Estrutura de keys do Baileys
                         const keyPath = data_key.replace('key-', '').split('-');
@@ -143,11 +151,22 @@ async function createAuthState(sessionUuid) {
                         target[keyPath[keyPath.length - 1]] = parsedValue;
                     }
                 } catch (parseError) {
-                    logger.error({ err: parseError, dataKey: data_key }, 'Erro ao parsear auth data - ignorando');
+                    logger.error({ err: parseError, dataKey: data_key }, 'Erro ao parsear auth data');
+                    // Se falhar ao parsear as credenciais principais, isso é crítico
+                    if (data_key === 'creds') {
+                        throw new Error(`Credenciais corrompidas: ${parseError.message}`);
+                    }
                 }
             }
 
-            logger.debug({ sessionUuid, keysLoaded: result.rows.length }, 'Auth state carregado');
+            // Validar se as credenciais carregadas são válidas
+            if (credsParsed) {
+                if (!authState.creds.noiseKey || !authState.creds.signedIdentityKey) {
+                    throw new Error('Credenciais incompletas: faltam campos essenciais (noiseKey ou signedIdentityKey)');
+                }
+            }
+
+            logger.debug({ sessionUuid, keysLoaded: result.rows.length, credsParsed }, 'Auth state carregado');
         } catch (error) {
             logger.error({ err: error, sessionUuid }, 'Erro ao carregar auth state');
             throw error;
