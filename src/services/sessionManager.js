@@ -63,6 +63,9 @@ class SessionManager {
             const { version } = await fetchLatestBaileysVersion();
             logger.info({ sessionId, version: version.join('.') }, 'Versão do Baileys obtida');
 
+            // Cache de retentativa de mensagens (Vital para evitar erro 515 na decifragem)
+            const msgRetryCounterCache = new Map();
+
             const sock = makeWASocket({
                 version,
                 logger: pino({ level: process.env.BAILEYS_LOG_LEVEL || 'warn' }),
@@ -71,15 +74,17 @@ class SessionManager {
                     creds: state.creds,
                     keys: state.keys
                 },
-                browser: ['WhatsApp Bot API', 'Chrome', '1.0.0'],
+                // Navegador mais "aceitável" para evitar desconexões
+                browser: ['Ubuntu', 'Chrome', '20.0.04'],
 
                 // === CONFIGURAÇÕES DE ESTABILIDADE ===
+                msgRetryCounterCache, // Adicionado para estabilidade
                 syncFullHistory: false, // Não sincroniza histórico completo (evita 515)
                 markOnlineOnConnect: false, // Não marca online imediatamente
                 connectTimeoutMs: 60000, // Timeout de 60s para conexão
-                defaultQueryTimeoutMs: 30000, // Timeout para queries
-                keepAliveIntervalMs: 25000, // Intervalo de keep-alive
-                retryRequestDelayMs: 500, // Delay entre retries
+                defaultQueryTimeoutMs: 60000, // Aumentado para 60s (evita timeout em queries lentas)
+                keepAliveIntervalMs: 10000, // Keep-alive mais agressivo (10s) para manter stream ativa
+                retryRequestDelayMs: 250, // Delay menor entre retries
 
                 getMessage: async (key) => {
                     // Retorna mensagem vazia para evitar erros de "message not found"
@@ -184,34 +189,44 @@ class SessionManager {
                 const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
 
                 // === TRATAMENTO ESPECIAL PARA ERRO 515 ===
-                // Erro 515 indica auth corrompido - precisa limpar antes de reconectar
+                // Erro 515 indica auth corrompido - geralmente precisa limpar.
+                // Mas as vezes é apenas instabilidade. Vamos tentar reconectar 3x antes de desistir.
                 if (statusCode === 515) {
-                    logger.warn({ sessionId }, 'Erro 515 detectado: Auth state possivelmente corrompido. Limpando credenciais...');
+                    const currentAttempts = this.reconnectAttempts.get(sessionId) || 0;
 
-                    try {
-                        await removeAuthState(sessionId);
-                        await Session.updateStatus(sessionId, 'disconnected');
-                        this.activeSessions.delete(sessionId);
-                        this.qrCodeCache.delete(sessionId);
-                        this.reconnectAttempts.delete(sessionId);
+                    // Só limpa se já tentou 3 vezes (0, 1, 2)
+                    if (currentAttempts >= 3) {
+                        logger.warn({ sessionId, attempts: currentAttempts }, 'Erro 515 persistente. Limpando credenciais...');
 
-                        console.log('\n========================================');
-                        console.log('⚠️  ERRO 515: Auth corrompido detectado!');
-                        console.log('🔄 Credenciais limpas. Reiniciando sessão...');
-                        console.log('📱 Um novo QR Code será gerado.');
-                        console.log('========================================\n');
+                        try {
+                            await removeAuthState(sessionId);
+                            await Session.updateStatus(sessionId, 'disconnected');
+                            this.activeSessions.delete(sessionId);
+                            this.qrCodeCache.delete(sessionId);
+                            this.reconnectAttempts.delete(sessionId);
 
-                        // Delay mais longo para garantir limpeza completa
-                        setTimeout(() => {
-                            this.createSession(sessionId).catch(err => {
-                                logger.error({ err, sessionId }, 'Erro ao recriar sessão após 515');
-                            });
-                        }, 3000);
-                    } catch (cleanupError) {
-                        logger.error({ err: cleanupError, sessionId }, 'Erro ao limpar auth após 515');
-                        await Session.updateStatus(sessionId, 'failed');
+                            console.log('\n========================================');
+                            console.log('⚠️  ERRO 515: Auth corrompido detectado (após ' + currentAttempts + ' tentativas)!');
+                            console.log('🔄 Credenciais limpas. Reiniciando sessão...');
+                            console.log('📱 Um novo QR Code será gerado.');
+                            console.log('========================================\n');
+
+                            // Delay mais longo para garantir limpeza completa
+                            setTimeout(() => {
+                                this.createSession(sessionId).catch(err => {
+                                    logger.error({ err, sessionId }, 'Erro ao recriar sessão após 515');
+                                });
+                            }, 3000);
+                        } catch (cleanupError) {
+                            logger.error({ err: cleanupError, sessionId }, 'Erro ao limpar auth após 515');
+                            await Session.updateStatus(sessionId, 'failed');
+                        }
+                        return;
+                    } else {
+                        console.log(`[${config.session_name}] ⚠️ Erro 515 detectado (Tentativa ${currentAttempts + 1}/3). Tentando reconexão simples...`);
+                        logger.warn({ sessionId, attempt: currentAttempts + 1 }, 'Erro 515 - Tentando reconexão antes de limpar credenciais');
+                        // Deixa cair no fluxo normal de reconexão abaixo (que incrementa o contador)
                     }
-                    return;
                 }
                 // ============================================
 
