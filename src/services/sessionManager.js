@@ -296,21 +296,21 @@ class SessionManager {
             logger.info({ sessionId, from: remoteJid }, `Mensagem recebida: ${texto}`);
 
             // === PROCESSAR MÍDIA PARA UPLOAD ===
-            const mediaMessage = imageMessage || documentMessage || audioMessage;
+            const hasMedia = imageMessage || documentMessage || audioMessage;
             let mediaPayload = {};
 
-            if (mediaMessage) {
+            if (hasMedia) {
                 try {
-                    logger.debug({ sessionId, mimeType: mediaMessage.mimetype }, 'Baixando mídia...');
+                    logger.info({ sessionId, mimeType: hasMedia.mimetype }, 'Baixando mídia...');
                     const buffer = await downloadMediaMessage(msg, 'buffer', {});
 
                     mediaPayload = {
                         media_data: buffer.toString('base64'),
-                        media_type: mediaMessage.mimetype,
-                        media_filename: mediaMessage.fileName || `arquivo_${Date.now()}`
+                        media_type: hasMedia.mimetype,
+                        media_filename: hasMedia.fileName || `arquivo_${Date.now()}`
                     };
 
-                    logger.info({ sessionId, type: mediaMessage.mimetype, size: buffer.length }, 'Mídia capturada com sucesso');
+                    logger.info({ sessionId, type: hasMedia.mimetype, size: buffer.length }, 'Mídia capturada com sucesso');
                 } catch (mediaErr) {
                     logger.warn({ err: mediaErr.message, sessionId }, 'Falha ao baixar mídia - continuando sem anexo');
                 }
