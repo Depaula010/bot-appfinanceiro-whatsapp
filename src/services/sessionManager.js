@@ -6,7 +6,8 @@ const {
     default: makeWASocket,
     fetchLatestBaileysVersion,
     DisconnectReason,
-    jidNormalizedUser
+    jidNormalizedUser,
+    downloadMediaMessage
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const axios = require('axios');
@@ -275,9 +276,16 @@ class SessionManager {
             // Extrair texto da mensagem (suporte a diversos formatos)
             const conversation = msg.message.conversation;
             const extendedText = msg.message.extendedTextMessage?.text;
-            const imageCaption = msg.message.imageMessage?.caption;
 
-            const texto = conversation || extendedText || imageCaption;
+            // === SUPORTE A MÍDIA (Google Drive Upload) ===
+            const imageMessage = msg.message.imageMessage;
+            const documentMessage = msg.message.documentMessage;
+            const audioMessage = msg.message.audioMessage;
+
+            // Caption pode vir de imagem ou documento
+            const mediaCaption = imageMessage?.caption || documentMessage?.caption;
+
+            const texto = conversation || extendedText || mediaCaption;
 
             if (!texto) return; // Ignora mensagens sem texto (ex: sticker sem legenda)
 
@@ -287,10 +295,32 @@ class SessionManager {
 
             logger.info({ sessionId, from: remoteJid }, `Mensagem recebida: ${texto}`);
 
-            // Preparar payload
+            // === PROCESSAR MÍDIA PARA UPLOAD ===
+            const mediaMessage = imageMessage || documentMessage || audioMessage;
+            let mediaPayload = {};
+
+            if (mediaMessage) {
+                try {
+                    logger.debug({ sessionId, mimeType: mediaMessage.mimetype }, 'Baixando mídia...');
+                    const buffer = await downloadMediaMessage(msg, 'buffer', {});
+
+                    mediaPayload = {
+                        media_data: buffer.toString('base64'),
+                        media_type: mediaMessage.mimetype,
+                        media_filename: mediaMessage.fileName || `arquivo_${Date.now()}`
+                    };
+
+                    logger.info({ sessionId, type: mediaMessage.mimetype, size: buffer.length }, 'Mídia capturada com sucesso');
+                } catch (mediaErr) {
+                    logger.warn({ err: mediaErr.message, sessionId }, 'Falha ao baixar mídia - continuando sem anexo');
+                }
+            }
+
+            // Preparar payload (com ou sem mídia)
             const payload = {
                 texto: texto,
-                numero_remetente: remoteJid
+                numero_remetente: remoteJid,
+                ...mediaPayload
             };
 
             // Gerar assinatura HMAC (Segurança)
