@@ -327,13 +327,19 @@ class SessionManager {
                 headers['x-api-key'] = apiKey;
             }
 
+            // IMPORTANTE: Serializar o payload ANTES de assinar
+            // O backend valida o HMAC dos bytes recebidos, então precisamos garantir
+            // que assinamos EXATAMENTE a mesma string que enviamos.
+            const payloadString = JSON.stringify(payload);
+
             if (signatureKey) {
-                const signature = generateWebhookSignature(payload, signatureKey);
+                // Assinamos a STRING, não o objeto
+                const signature = generateWebhookSignature(payloadString, signatureKey);
                 headers['X-Webhook-Signature'] = signature;
             }
 
-            // Enviar POST para a URL definitiva
-            const response = await axios.post(webhookUrl, payload, { headers });
+            // Enviar a STRING serializada (não o objeto) para garantir consistência
+            const response = await axios.post(webhookUrl, payloadString, { headers });
 
             // Processar resposta do Backend
             if (response.data && response.data.resposta) {
