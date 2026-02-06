@@ -272,10 +272,79 @@ class SessionManager {
         if (!msg.message || msg.key.fromMe || isBroadcast(msg.key.remoteJid)) return;
 
         try {
-            // Lógica de webhook aqui (simplificada para focar na conexão)
-            // ...
+            // Extrair texto da mensagem (suporte a diversos formatos)
+            const conversation = msg.message.conversation;
+            const extendedText = msg.message.extendedTextMessage?.text;
+            const imageCaption = msg.message.imageMessage?.caption;
+
+            const texto = conversation || extendedText || imageCaption;
+
+            if (!texto) return; // Ignora mensagens sem texto (ex: sticker sem legenda)
+
+            const remoteJid = msg.key.remoteJid;
+            // Apenas mensagens privadas por enquanto
+            if (remoteJid.includes('@g.us')) return;
+
+            logger.info({ sessionId, from: remoteJid }, `Mensagem recebida: ${texto}`);
+
+            // Preparar payload
+            const payload = {
+                texto: texto,
+                numero_remetente: remoteJid
+            };
+
+            // Gerar assinatura HMAC (Segurança)
+            // === SAAS / MULTI-TENANCY SUPPORT ===
+            // 1. Tenta pegar a URL do webhook configurada na sessão (Banco de Dados)
+            // 2. Se não existir, usa o padrão do .env (Fallback para desenvolvimento/legado)
+            const webhookUrl = config.webhook_url || `${process.env.PYTHON_API_URL || 'http://localhost:5000'}/webhooks/webhook-whatsapp`;
+
+            // === AUTENTICAÇÃO DINÂMICA ===
+            // 1. Tenta pegar o token nos metadados da sessão
+            // 2. Fallback para a chave global do .env
+            const apiKey = config.metadata?.webhook_auth_token || process.env.API_SECRET_KEY;
+
+            // Chave HMAC específica da sessão (ou global)
+            const signatureKey = config.webhook_signature_key || process.env.WEBHOOK_SIGNATURE_KEY;
+
+            logger.debug({
+                sessionId,
+                url: webhookUrl,
+                usingSessionConfig: !!config.webhook_url
+            }, 'Enviando webhook...');
+
+            // Preparar headers dinâmicos
+            let headers = {
+                'Content-Type': 'application/json'
+            };
+
+            if (apiKey) {
+                headers['x-api-key'] = apiKey;
+            }
+
+            if (signatureKey) {
+                const signature = generateWebhookSignature(payload, signatureKey);
+                headers['X-Webhook-Signature'] = signature;
+            }
+
+            // Enviar POST para a URL definitiva
+            const response = await axios.post(webhookUrl, payload, { headers });
+
+            // Processar resposta do Backend
+            if (response.data && response.data.resposta) {
+                const respostaTexto = response.data.resposta;
+                logger.info({ sessionId, to: remoteJid }, `Enviando resposta: ${respostaTexto}`);
+
+                const sock = this.activeSessions.get(sessionId);
+                if (sock) {
+                    await sock.sendMessage(remoteJid, { text: respostaTexto });
+                }
+            }
+
         } catch (e) {
-            logger.error({ err: e, sessionId }, 'Erro ao processar mensagem recebida');
+            logger.error({ err: e.message, sessionId }, 'Erro ao processar mensagem recebida');
+            // Opcional: Avisar usuário se for erro de conexão com backend? 
+            // Melhor não para não spamar, apenas logar.
         }
     }
 
