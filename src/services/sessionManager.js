@@ -364,14 +364,17 @@ class SessionManager {
     getQRCode(sessionId) { return this.qrCodeCache.get(sessionId); }
     getStats() { return { active_sessions: this.activeSessions.size }; }
 
-    async disconnectSession(sessionId) {
+    async disconnectSession(sessionId, shouldUpdateDb = true) {
         const sock = this.activeSessions.get(sessionId);
         if (sock) {
             // Fecha o socket
             sock.end(undefined);
             this.activeSessions.delete(sessionId);
         }
-        await Session.updateStatus(sessionId, 'disconnected');
+
+        if (shouldUpdateDb) {
+            await Session.updateStatus(sessionId, 'disconnected');
+        }
     }
 
     async logEvent(sessionId, eventType, details = {}) {

@@ -429,7 +429,8 @@ async function gracefulShutdown(signal) {
 
         for (const sessionId of sessions) {
             try {
-                await sessionManager.disconnectSession(sessionId);
+                // Não alterar status no banco durante shutdown para permitir auto-reconnect
+                await sessionManager.disconnectSession(sessionId, false);
             } catch (error) {
                 logger.error({ err: error, sessionId }, 'Erro ao desconectar sessão');
             }
