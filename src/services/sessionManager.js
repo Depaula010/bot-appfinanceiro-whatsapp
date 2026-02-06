@@ -295,9 +295,14 @@ class SessionManager {
 
             // Gerar assinatura HMAC (Segurança)
             // === SAAS / MULTI-TENANCY SUPPORT ===
-            // 1. Tenta pegar a URL do webhook configurada na sessão (Banco de Dados)
-            // 2. Se não existir, usa o padrão do .env (Fallback para desenvolvimento/legado)
-            const webhookUrl = config.webhook_url || `${process.env.PYTHON_API_URL || 'http://localhost:5000'}/webhooks/webhook-whatsapp`;
+            // A URL do webhook deve vir ESTRITAMENTE da configuração da sessão no banco.
+            // Sem fallback para variáveis de ambiente globais.
+            const webhookUrl = config.webhook_url;
+
+            if (!webhookUrl) {
+                logger.warn({ sessionId }, 'Webhook URL não configurada na sessão. Ignorando mensagem.');
+                return;
+            }
 
             // === AUTENTICAÇÃO DINÂMICA ===
             // 1. Tenta pegar o token nos metadados da sessão
