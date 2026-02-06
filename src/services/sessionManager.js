@@ -396,6 +396,13 @@ class SessionManager {
         return await sock.sendMessage(chatId, { text: mensagem });
     }
 
+    async sendImage(sessionId, numero, imageBuffer, caption = '') {
+        const sock = this.activeSessions.get(sessionId);
+        if (!sock) throw new Error('Session not connected');
+        const chatId = formatarChatId(numero);
+        return await sock.sendMessage(chatId, { image: imageBuffer, caption });
+    }
+
     getSession(sessionId) { return this.activeSessions.get(sessionId); }
     getQRCode(sessionId) { return this.qrCodeCache.get(sessionId); }
     getStats() { return { active_sessions: this.activeSessions.size }; }
