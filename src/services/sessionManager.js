@@ -285,9 +285,14 @@ class SessionManager {
             // Caption pode vir de imagem ou documento
             const mediaCaption = imageMessage?.caption || documentMessage?.caption;
 
-            const texto = conversation || extendedText || mediaCaption;
+            // Detectar mídia ANTES da verificação de texto
+            const hasMedia = imageMessage || documentMessage || audioMessage;
 
-            if (!texto) return; // Ignora mensagens sem texto (ex: sticker sem legenda)
+            // Se tem mídia mas sem legenda, usar comando padrão para o Drive
+            const textoBase = conversation || extendedText || mediaCaption;
+            const texto = textoBase || (hasMedia ? 'salvar no drive' : null);
+
+            if (!texto) return; // Ignora mensagens sem texto e sem mídia (ex: sticker)
 
             const remoteJid = msg.key.remoteJid;
             // Apenas mensagens privadas por enquanto
@@ -296,7 +301,6 @@ class SessionManager {
             logger.info({ sessionId, from: remoteJid }, `Mensagem recebida: ${texto}`);
 
             // === PROCESSAR MÍDIA PARA UPLOAD ===
-            const hasMedia = imageMessage || documentMessage || audioMessage;
             let mediaPayload = {};
 
             if (hasMedia) {
@@ -312,7 +316,12 @@ class SessionManager {
 
                     logger.info({ sessionId, type: hasMedia.mimetype, size: buffer.length }, 'Mídia capturada com sucesso');
                 } catch (mediaErr) {
-                    logger.warn({ err: mediaErr.message, sessionId }, 'Falha ao baixar mídia - continuando sem anexo');
+                    console.error(`[${config.session_name}] ❌ Falha ao baixar mídia: ${mediaErr.message}`);
+                    const sock = this.activeSessions.get(sessionId);
+                    if (sock) {
+                        await sock.sendMessage(remoteJid, { text: '❌ Não consegui processar o arquivo enviado. Tente novamente.' });
+                    }
+                    return;
                 }
             }
 
