@@ -325,10 +325,17 @@ class SessionManager {
                 }
             }
 
+            // WhatsApp Multi-Device usa LID (@lid) em vez do número de telefone.
+            // Para lookup no backend, precisamos do número real (senderPn).
+            const isLidJid = remoteJid.endsWith('@lid');
+            const senderForLookup = isLidJid
+                ? (msg.key.senderPn || remoteJid)
+                : remoteJid;
+
             // Preparar payload (com ou sem mídia)
             const payload = {
                 texto: texto,
-                numero_remetente: remoteJid,
+                numero_remetente: senderForLookup,
                 ...mediaPayload
             };
 
